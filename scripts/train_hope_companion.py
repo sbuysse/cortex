@@ -68,25 +68,30 @@ class SelfModifyingLayer(nn.Module):
 
         Returns:
             out: (B, S, d_model)
+
+        Vectorized via causal conv1d — single GPU kernel instead of S sequential steps.
+        h_t = sum_{i<=t} decay^(t-i) * u_i   where u_i = mask_i * linear_update(x_i)
         """
         B = x.shape[0]
         S = x.shape[1]
-        decay = torch.sigmoid(self.decay_param)
+        D = self.d_model
+        decay = torch.sigmoid(self.decay_param)  # scalar in (0,1)
 
-        memory = torch.zeros(B, self.d_model, device=x.device, dtype=x.dtype)
-        outputs: List[Tensor] = []
+        # Compute updates, zeroing out padding positions
+        u = self.linear_update(x)                          # (B, S, D)
+        u = u * mask.unsqueeze(-1)                         # zero padding
 
-        for t in range(S):
-            x_t = x[:, t, :]              # (B, d_model)
-            m_t = mask[:, t].unsqueeze(1)  # (B, 1)
-            update = self.linear_update(x_t)
-            new_memory = decay * memory + update
-            # Apply mask: only update memory for non-padding tokens
-            memory = m_t * new_memory + (1.0 - m_t) * memory
-            out_t = self.linear_f(memory)  # (B, d_model)
-            outputs.append(out_t.unsqueeze(1))
+        # Build causal decay kernel: [decay^(S-1), ..., decay^1, decay^0]
+        t_idx = torch.arange(S, device=x.device, dtype=x.dtype)
+        kernel = (decay ** t_idx).flip(0)                  # (S,)
+        kernel = kernel.view(1, 1, S)                      # (1, 1, S)
 
-        return torch.cat(outputs, dim=1)  # (B, S, d_model)
+        # Apply causal conv per channel: (B*D, 1, S) * (1,1,S) -> (B*D, 1, S)
+        u_t = u.permute(0, 2, 1).reshape(B * D, 1, S)     # (B*D, 1, S)
+        h_t = torch.nn.functional.conv1d(u_t, kernel, padding=S - 1)  # (B*D, 1, 2S-1)
+        h = h_t[:, :, :S].squeeze(1).reshape(B, D, S).permute(0, 2, 1)  # (B, S, D)
+
+        return self.linear_f(h.reshape(-1, D)).reshape(B, S, D)  # (B, S, D)
 
 
 class ContinuumMemoryBlock(nn.Module):
