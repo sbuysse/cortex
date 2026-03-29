@@ -67,20 +67,27 @@ def make_brain_vec(user_message: str, emotion_table: np.ndarray) -> List[int]:
 
 
 class GroundedDataset(Dataset):
-    """Extends CompanionDataset with synthetic brain state vectors."""
+    """Companion triples dataset with precomputed synthetic brain state vectors."""
 
     def __init__(self, triples_path: str, seq_len: int, emotion_table: np.ndarray) -> None:
         self.seq_len = seq_len
-        self.samples: List[Tuple[List[int], List[int], str]] = []  # input, labels, user_msg
+        # Store (input_ids, labels, brain_vec) — brain_vec precomputed to avoid per-call cost
+        self.samples: List[Tuple[List[int], List[int], List[int]]] = []
+
+        n_raw = 0
+        n_dropped_json = 0
+        n_dropped_crt = 0
 
         with open(triples_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
+                n_raw += 1
                 try:
                     triple = json.loads(line)
                 except json.JSONDecodeError:
+                    n_dropped_json += 1
                     continue
 
                 context = triple.get("context", "")
@@ -107,6 +114,7 @@ class GroundedDataset(Dataset):
                         break
 
                 if crt_pos == -1 or crt_pos >= len(doc_bytes):
+                    n_dropped_crt += 1
                     continue
 
                 input_ids = doc_bytes[:seq_len]
@@ -118,16 +126,23 @@ class GroundedDataset(Dataset):
                     if i < seq_len:
                         labels[i] = doc_bytes[i + 1]
 
-                self.samples.append((input_ids, labels, user_message))
+                brain_vec = make_brain_vec(user_message, emotion_table)
+                self.samples.append((input_ids, labels, brain_vec))
 
-        self.emotion_table = emotion_table
+        print(
+            f"Parsed {n_raw} lines. Dropped {n_dropped_json} JSON errors, "
+            f"{n_dropped_crt} truncated (no CRT marker). Kept {len(self.samples)}."
+        )
+        if n_raw > 0:
+            drop_rate = (n_dropped_json + n_dropped_crt) / n_raw
+            if drop_rate > 0.20:
+                print(f"WARNING: high sample drop rate ({drop_rate:.0%}) — check seq_len or data format.")
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        input_ids, labels, user_message = self.samples[idx]
-        brain_vec = make_brain_vec(user_message, self.emotion_table)
+        input_ids, labels, brain_vec = self.samples[idx]
         return (
             torch.tensor(input_ids, dtype=torch.long),
             torch.tensor(labels, dtype=torch.long),
@@ -140,8 +155,16 @@ def train(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    # Load emotion table
-    emotion_table = np.fromfile(args.emotion_table, dtype=np.float32).reshape(8, 512)
+    # Load and validate emotion table
+    n_emotions = len(EMOTION_TO_IDX)
+    brain_dim = COMPANION_NANO["d_model"]  # 512-dim brain state → d_model projection input
+    raw = np.fromfile(args.emotion_table, dtype=np.float32)
+    expected = n_emotions * 512  # brain_dim is 512 (Brain state dim), not d_model
+    if raw.size != expected:
+        print(f"ERROR: emotion table has {raw.size} floats, expected {expected} "
+              f"({n_emotions} emotions × 512 dims)")
+        sys.exit(1)
+    emotion_table = raw.reshape(n_emotions, 512)
     print(f"Emotion table loaded: {emotion_table.shape}")
 
     # Load dataset
@@ -161,9 +184,12 @@ def train(args: argparse.Namespace) -> None:
 
     # Build model, load Phase 1 weights
     model = HOPE(**COMPANION_NANO).to(device)
-    ckpt = torch.load(args.base_checkpoint, map_location="cpu", weights_only=False)
-    missing, _ = model.load_state_dict(ckpt["model_state_dict"], strict=False)
-    print(f"Phase 1 checkpoint loaded. New params (need training): {missing}")
+    # weights_only=True is safe: checkpoint contains only tensors and plain Python dicts
+    ckpt = torch.load(args.base_checkpoint, map_location="cpu", weights_only=True)
+    missing, unexpected = model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    if unexpected:
+        print(f"WARNING: unexpected checkpoint keys (architecture mismatch?): {unexpected}")
+    print(f"Phase 1 checkpoint loaded. New params (will be randomly initialized): {missing}")
 
     # Freeze all except BrainProjection and CMS FFN layers
     for name, param in model.named_parameters():
@@ -259,7 +285,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32, dest="batch_size")
     parser.add_argument("--lr", type=float, default=3e-4)
-    return train(parser.parse_args())
+    train(parser.parse_args())
 
 
 if __name__ == "__main__":
