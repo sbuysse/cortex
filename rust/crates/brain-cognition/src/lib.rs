@@ -25,4 +25,4 @@ pub use memory_db::MemoryDb;
 pub use personal_memory::PersonalMemory;
 pub use concepts::ConceptCodebook;
 pub use state::BrainState;
-pub use brain_state::{compose_brain_state, load_emotion_table};
+pub use brain_state::{compose_brain_state, emotion_to_idx, load_emotion_table};
