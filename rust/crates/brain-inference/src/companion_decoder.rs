@@ -9,6 +9,7 @@
 //! TorchScript interface:
 //!   forward(tokens: Tensor[Long, (B, S)]) -> Tensor[(B, S, 256)]
 //!   generate(prompt_bytes: List[int], max_new: int) -> List[int]
+//!   generate_grounded(brain_vec: List[int], prompt_bytes: List[int], max_new: int) -> List[int]
 
 use std::path::Path;
 use tch::{CModule, IValue};
@@ -134,8 +135,6 @@ impl CompanionDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_brain_vec_packing_roundtrip() {
         // Floats in [-1, 1] packed as i64 (×1000) and unpacked (/1000) lose < 0.001
