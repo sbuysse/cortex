@@ -68,11 +68,13 @@ impl ConceptCodebook {
         let n = self.centroids.nrows();
         if n == 0 { return None; }
         let emb_norm = l2_norm(emb);
-        let best = (0..n).max_by(|&i, &j| {
-            let si: f32 = self.centroids.row(i).iter().zip(&emb_norm).map(|(a, b)| a * b).sum();
-            let sj: f32 = self.centroids.row(j).iter().zip(&emb_norm).map(|(a, b)| a * b).sum();
-            si.partial_cmp(&sj).unwrap_or(std::cmp::Ordering::Equal)
-        })?;
+        let best = (0..n)
+            .map(|i| {
+                let sim: f32 = self.centroids.row(i).iter().zip(&emb_norm).map(|(a, b)| a * b).sum();
+                (i, sim)
+            })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)?;
         Some(self.centroids.row(best).to_vec())
     }
 
@@ -216,18 +218,16 @@ mod tests {
 
     #[test]
     fn test_top1_centroid_returns_512dim() {
-        // Build a minimal codebook with 2 centroids directly
         let mut centroids = Array2::<f32>::zeros((2, 512));
         centroids[[0, 0]] = 1.0;
         centroids[[1, 1]] = 1.0;
         let cb = ConceptCodebook { centroids, labels: vec!["a".into(), "b".into()] };
 
-        // Query near centroid 0
         let mut q = vec![0.0f32; 512];
         q[0] = 1.0;
-        let result = cb.top1_centroid(&q);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), 512);
+        let result = cb.top1_centroid(&q).unwrap();
+        assert_eq!(result.len(), 512);
+        assert!((result[0] - 1.0).abs() < 1e-6, "expected centroid 0 to be selected");
     }
 
     #[test]
