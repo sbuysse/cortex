@@ -42,8 +42,6 @@ def make_brain_vec(emotion: str, emotion_table: np.ndarray) -> List[int]:
     Emotion embedding is the dominant signal during Phase 2 training.
     """
     idx = EMOTION_TO_IDX.get(emotion, 0)
-    if emotion not in EMOTION_TO_IDX:
-        print(f"WARNING: unknown emotion '{emotion}', defaulting to neutral")
     vec = emotion_table[idx]  # (512,) float32
     return [round(float(v) * 1000) for v in vec]
 
@@ -60,6 +58,7 @@ class GroundedDataset(Dataset):
         n_dropped_json = 0
         n_dropped_crt = 0
         n_dropped_emotion = 0
+        n_unknown_emotion = 0
 
         with open(triples_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -79,6 +78,9 @@ class GroundedDataset(Dataset):
                 emotion = triple.get("emotion")
                 if emotion is None:
                     n_dropped_emotion += 1
+                    emotion = "neutral"
+                elif emotion not in EMOTION_TO_IDX:
+                    n_unknown_emotion += 1
                     emotion = "neutral"
 
                 doc = (
@@ -119,7 +121,8 @@ class GroundedDataset(Dataset):
         print(
             f"Parsed {n_raw} lines. Dropped {n_dropped_json} JSON errors, "
             f"{n_dropped_crt} truncated (no CRT marker), "
-            f"{n_dropped_emotion} missing emotion field. Kept {len(self.samples)}."
+            f"{n_dropped_emotion} missing emotion field, "
+            f"{n_unknown_emotion} unknown emotion (→ neutral). Kept {len(self.samples)}."
         )
         if n_raw > 0:
             drop_rate = (n_dropped_json + n_dropped_crt) / n_raw
