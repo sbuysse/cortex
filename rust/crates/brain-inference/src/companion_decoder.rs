@@ -57,7 +57,9 @@ impl CompanionDecoder {
             .filter_map(|&b| if b >= 0 && b < 256 { Some(b as u8) } else { None })
             .collect();
 
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+        // Strip UTF-8 replacement chars (byte-level model sometimes generates
+        // isolated high bytes that form invalid sequences)
+        let text = String::from_utf8_lossy(&bytes).replace('\u{FFFD}', "");
 
         // Capitalise first letter, add period if missing
         let mut text = text.trim().to_string();
@@ -119,7 +121,7 @@ impl CompanionDecoder {
             .filter_map(|&b| if b >= 0 && b < 256 { Some(b as u8) } else { None })
             .collect();
 
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let text = String::from_utf8_lossy(&bytes).replace('\u{FFFD}', "");
         let mut text = text.trim().to_string();
         if let Some(c) = text.get_mut(0..1) { c.make_ascii_uppercase(); }
         if !text.is_empty()
