@@ -218,10 +218,6 @@ class HOPE(nn.Module):
             tokens = torch.tensor(padded, dtype=torch.long).unsqueeze(0)  # (1, seq_len)
             logits = self.forward(tokens)  # (1, seq_len, vocab_size)
 
-            # Get logits at the last real position
-            last_pos = len(context) - 1
-            if last_pos >= seq_len:
-                last_pos = seq_len - 1
             # Account for left-padding offset
             pad_offset = seq_len - len(context)
             if pad_offset < 0:
