@@ -2534,18 +2534,26 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     }
     let brain_ctx = brain_ctx_parts.join("; ");
 
-    // ── 3a. Try native HOPE decoder first ──────────────────────────
+    // ── 3a. Try native HOPE decoder first (Brain-grounded) ─────────────
     let native_response: Option<String> = if let Some(dec) = &brain.companion_decoder {
-        let ctx_text = {
-            let pm = brain.personal_memory.lock().unwrap();
-            brain_cognition::personal::build_personal_context(&pm)
+        let (brain_vec, hope_ctx) = {
+            let pm  = brain.personal_memory.lock().unwrap();
+            let wm  = brain.working_memory.lock().unwrap();
+            let fm  = brain.fast_memory.lock().unwrap();
+            let cb  = brain.codebook.lock().unwrap();
+            let bv  = brain_cognition::brain_state::compose_brain_state(
+                &wm,
+                &fm,
+                cb.as_ref(),
+                detected_emotion,
+                &brain.emotion_table,
+            );
+            let ctx = brain_cognition::personal::build_hope_context(&pm);
+            (bv, ctx)
+            // all guards drop here — no Mutex held across the generate call
         };
-        let response = brain_cognition::companion::native_reply(dec, &ctx_text, &message, 80);
-        if response.len() > 5 {
-            Some(response)
-        } else {
-            None
-        }
+        let response = dec.generate_grounded(&brain_vec, &hope_ctx, &message, 130);
+        if response.len() > 5 { Some(response) } else { None }
     } else {
         None
     };

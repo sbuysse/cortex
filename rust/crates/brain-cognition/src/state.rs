@@ -32,6 +32,7 @@ pub struct BrainState {
     pub clip_encoder: Option<brain_inference::CLIPEncoder>,
     pub audio_encoder: Option<brain_inference::WhisperEncoder>,
     pub companion_decoder: Option<brain_inference::CompanionDecoder>,
+    pub emotion_table: Vec<[f32; 512]>,
     pub online_pairs: std::sync::Mutex<Vec<(Vec<f32>, Vec<f32>)>>,
     pub online_learning_count: std::sync::atomic::AtomicI64,
     pub autonomy_running: std::sync::atomic::AtomicBool,
@@ -136,6 +137,16 @@ impl BrainState {
             }
         };
 
+        let emotion_table_path = config.project_root
+            .join("outputs/cortex/hope_companion/emotion_table.bin");
+        let emotion_table = crate::brain_state::load_emotion_table(&emotion_table_path);
+        let all_zero = emotion_table.iter().all(|row| row.iter().all(|&x| x == 0.0));
+        if all_zero {
+            tracing::info!("Emotion table not found — grounded mode uses zero emotion bias");
+        } else {
+            tracing::info!("Emotion table loaded ({} emotions)", emotion_table.len());
+        }
+
         // Build concept codebook if we have text encoder + MLP
         // Concept codebook: built from pre-encoded label embeddings (fast, no TorchScript calls)
         let codebook = match (&text_encoder, &inference) {
@@ -183,6 +194,7 @@ impl BrainState {
             clip_encoder,
             audio_encoder,
             companion_decoder,
+            emotion_table,
             online_pairs: std::sync::Mutex::new(Vec::new()),
             online_learning_count: std::sync::atomic::AtomicI64::new(online_count),
             autonomy_running: std::sync::atomic::AtomicBool::new(false),
@@ -215,6 +227,7 @@ impl BrainState {
                 "visual_encoder": self.visual_encoder.is_some(),
                 "clip_encoder": self.clip_encoder.is_some(),
                 "audio_encoder": self.audio_encoder.is_some(),
+                "companion_decoder": self.companion_decoder.is_some(),
                 "grid_encoder": grid_fitted,
                 "memory_db": true,
             },
