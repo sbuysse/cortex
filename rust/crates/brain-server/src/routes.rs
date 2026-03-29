@@ -2553,7 +2553,7 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             // all guards drop here — no Mutex held across the generate call
         };
         let response = dec.generate_grounded(&brain_vec, &hope_ctx, &message, 130);
-        if response.len() > 5 { Some(response) } else { None }
+        if response.trim().chars().count() > 5 { Some(response) } else { None }
     } else {
         None
     };

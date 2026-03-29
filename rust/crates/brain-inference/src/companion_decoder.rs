@@ -38,7 +38,7 @@ impl CompanionDecoder {
         ]) {
             Ok(out) => out,
             Err(e) => {
-                eprintln!("[companion_decoder] generate failed: {e}");
+                tracing::warn!("[companion_decoder] generate failed: {e}");
                 return String::new();
             }
         };
@@ -47,7 +47,7 @@ impl CompanionDecoder {
         let byte_ids: Vec<i64> = match result {
             IValue::IntList(v) => v,
             other => {
-                eprintln!("[companion_decoder] unexpected IValue variant: {other:?}");
+                tracing::warn!("[companion_decoder] unexpected IValue variant: {other:?}");
                 return String::new();
             }
         };
@@ -102,7 +102,7 @@ impl CompanionDecoder {
         ]) {
             Ok(out) => out,
             Err(e) => {
-                eprintln!("[companion_decoder] generate_grounded failed ({e}) — fallback to generate()");
+                tracing::warn!("[companion_decoder] generate_grounded failed ({e}) — fallback to generate()");
                 return self.generate(context_text, user_message, max_tokens);
             }
         };
@@ -110,7 +110,7 @@ impl CompanionDecoder {
         let byte_ids: Vec<i64> = match result {
             IValue::IntList(v) => v,
             other => {
-                eprintln!("[companion_decoder] generate_grounded unexpected output: {other:?}");
+                tracing::warn!("[companion_decoder] generate_grounded unexpected output: {other:?}");
                 return self.generate(context_text, user_message, max_tokens);
             }
         };

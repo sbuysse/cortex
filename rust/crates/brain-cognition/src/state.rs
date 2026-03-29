@@ -3,7 +3,6 @@
 //! Owns all subsystems: working memory, fast memory, grid encoder,
 //! SSE bus, memory database, inference engine, and configuration.
 
-use std::sync::Arc;
 use crate::config::BrainConfig;
 use crate::sse::SseBus;
 use crate::working_memory::WorkingMemory;
