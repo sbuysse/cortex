@@ -28,8 +28,11 @@ pub struct QuantizedIndex {
 
 impl QuantizedIndex {
     /// Build a quantized index from labeled f32 vectors.
+    ///
+    /// # Panics (debug builds only)
+    /// Panics if `labels.len() != vecs.len()`.
     pub fn build(labels: &[String], vecs: &[&[f32]]) -> Self {
-        assert_eq!(labels.len(), vecs.len());
+        debug_assert_eq!(labels.len(), vecs.len(), "labels and vecs must have the same length");
         if vecs.is_empty() {
             return Self {
                 signs: vec![],
@@ -56,7 +59,12 @@ impl QuantizedIndex {
     }
 
     /// Append one vector to a live index (for dynamic indices).
-    /// Silently ignored if vec.len() != self.dim.
+    ///
+    /// Uses scale/zero calibrated at build time. For best accuracy, rebuild the
+    /// index (via `build`) after significant numbers of insertions, as new vectors
+    /// may fall outside the original calibration range.
+    ///
+    /// Silently ignored if `vec.len() != self.dim` or if the index is empty.
     pub fn insert(&mut self, label: &str, vec: &[f32]) {
         if self.dim == 0 || vec.len() != self.dim {
             return;
@@ -126,13 +134,6 @@ fn apply_signs(v: &[f32], signs: &[i8]) -> Vec<f32> {
 
 fn calibrate(vecs: &[Vec<f32>], dim: usize) -> (Vec<f32>, Vec<f32>) {
     let n = vecs.len();
-    // With fewer than ~100 vectors the p1/p99 percentile collapses to the same
-    // element; fall back to a symmetric fixed range that covers unit vectors.
-    if n < 10 {
-        let scale = vec![2.0f32 / 15.0; dim]; // maps [-1, 1] to [0, 15]
-        let zero = vec![-1.0f32; dim];
-        return (scale, zero);
-    }
     let mut scale = vec![1.0f32; dim];
     let mut zero = vec![0.0f32; dim];
     let mut col: Vec<f32> = Vec::with_capacity(n);
@@ -148,8 +149,16 @@ fn calibrate(vecs: &[Vec<f32>], dim: usize) -> (Vec<f32>, Vec<f32>) {
         let hi_idx = ((n as f32 * 0.99) as usize).min(n - 1);
         let lo = col[lo_idx];
         let hi = col[hi_idx];
-        zero[d] = lo;
-        scale[d] = if hi > lo { (hi - lo) / 15.0 } else { 1.0 };
+        if hi > lo {
+            zero[d] = lo;
+            scale[d] = (hi - lo) / 15.0;
+        } else {
+            // Degenerate: all values identical — use scale=1.0 and center the
+            // range around the observed value so other vectors have room to
+            // encode above and below it.
+            scale[d] = 1.0;
+            zero[d] = lo - 7.5;
+        }
     }
     (scale, zero)
 }
