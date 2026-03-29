@@ -34,6 +34,7 @@ COMPANION_NANO = {
     "vocab_size": 256,    # byte-level
     "seq_len": 512,
     "dropout": 0.1,
+    "brain_dim": 512,
 }
 
 CRT_MARKER = b" [CRT] "   # 7 bytes — response start marker
