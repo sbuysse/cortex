@@ -322,6 +322,7 @@ def cosine_lr(step: int, warmup: int, total: int, base_lr: float) -> float:
 
 def print_sample(model: HOPE, device: torch.device) -> None:
     model.eval()
+    model.cpu()
     prompt = b"[CTX] You are talking to Alice. [USR] How are you today? [CRT] "
     prompt_bytes = list(prompt)
     with torch.no_grad():
@@ -331,6 +332,7 @@ def print_sample(model: HOPE, device: torch.device) -> None:
     except Exception:
         text = str(response_bytes)
     print(f"  Sample response: {repr(text)}")
+    model.to(device)
     model.train()
 
 
