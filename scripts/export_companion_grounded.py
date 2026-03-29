@@ -27,14 +27,14 @@ def export(args: argparse.Namespace) -> None:
     model = HOPE(**COMPANION_NANO).to(device)
 
     # Load base weights (strict=False: brain_proj not in base checkpoint)
-    base_ckpt = torch.load(args.base_checkpoint, map_location="cpu")
+    base_ckpt = torch.load(args.base_checkpoint, map_location="cpu", weights_only=False)
     missing, unexpected = model.load_state_dict(base_ckpt["model_state_dict"], strict=False)
     print(f"Base checkpoint loaded. Missing keys: {missing}")
     print(f"Unexpected keys: {unexpected}")
 
     # Load grounded weights if available (overwrites BrainProjection + FFN weights)
     if args.grounded_checkpoint and Path(args.grounded_checkpoint).exists():
-        grounded_ckpt = torch.load(args.grounded_checkpoint, map_location="cpu")
+        grounded_ckpt = torch.load(args.grounded_checkpoint, map_location="cpu", weights_only=False)
         missing2, _ = model.load_state_dict(grounded_ckpt["model_state_dict"], strict=False)
         print(f"Grounded checkpoint loaded. Missing: {missing2}")
     else:

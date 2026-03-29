@@ -8,7 +8,6 @@ Output: emotion_table.bin — 8 × 512 × 4 bytes = 16384 bytes, row-major f32 L
 """
 
 import argparse
-import struct
 from pathlib import Path
 
 import numpy as np
