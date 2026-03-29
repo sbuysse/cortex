@@ -216,7 +216,7 @@ class HOPE(nn.Module):
                 padded = context[len(context) - seq_len:]
 
             tokens = torch.tensor(padded, dtype=torch.long).unsqueeze(0)  # (1, seq_len)
-            logits = self.forward(tokens)  # (1, seq_len, vocab_size)
+            logits = self.forward(tokens, None)  # (1, seq_len, vocab_size)
 
             # Account for left-padding offset
             pad_offset = seq_len - len(context)
