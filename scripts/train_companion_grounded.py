@@ -35,32 +35,12 @@ EMOTION_TO_IDX = {
 }
 
 
-def detect_emotion(text: str) -> str:
-    t = text.lower()
-    if any(w in t for w in ["miss", "sad", "lonely", "cry", "passed away", "died", "alone"]):
-        return "sad"
-    if any(w in t for w in ["hurt", "pain", "ache", "sick"]):
-        return "pain"
-    if any(w in t for w in ["happy", "wonderful", "great", "love", "laugh", "smile", "joy"]):
-        return "happy"
-    if any(w in t for w in ["afraid", "scared", "worried", "anxious"]):
-        return "fearful"
-    if any(w in t for w in ["angry", "frustrated", "annoyed", "furious"]):
-        return "angry"
-    if any(w in t for w in ["confused", "don't understand", "what day"]):
-        return "confused"
-    if any(w in t for w in ["tired", "exhausted", "sleepy"]):
-        return "tired"
-    return "neutral"
-
-
-def make_brain_vec(user_message: str, emotion_table: np.ndarray) -> List[int]:
-    """Create synthetic brain state from user message emotion.
+def make_brain_vec(emotion: str, emotion_table: np.ndarray) -> List[int]:
+    """Create synthetic brain state from ground-truth emotion label.
 
     WM/FM/concept are zero (not available at training time).
     Emotion embedding is the dominant signal during Phase 2 training.
     """
-    emotion = detect_emotion(user_message)
     idx = EMOTION_TO_IDX.get(emotion, 0)
     vec = emotion_table[idx]  # (512,) float32
     return [round(float(v) * 1000) for v in vec]
@@ -90,9 +70,10 @@ class GroundedDataset(Dataset):
                     n_dropped_json += 1
                     continue
 
-                context = triple.get("context", "")
+                context = triple.get("context_text", "")
                 user_message = triple.get("user_message", "")
                 response = triple.get("response", "")
+                emotion = triple.get("emotion", "neutral")
 
                 doc = (
                     b"[CTX] "
@@ -126,7 +107,7 @@ class GroundedDataset(Dataset):
                     if i < seq_len:
                         labels[i] = doc_bytes[i + 1]
 
-                brain_vec = make_brain_vec(user_message, emotion_table)
+                brain_vec = make_brain_vec(emotion, emotion_table)
                 self.samples.append((input_ids, labels, brain_vec))
 
         print(
