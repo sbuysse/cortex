@@ -1,0 +1,17 @@
+[package]
+name = "brain-inference"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ndarray = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+safetensors = "0.4"
+tch = "0.23"
+rustfft = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }

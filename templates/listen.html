@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+
+{% block title %}Listen — Brain{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-6">
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-white">Real-Time Listening</h1>
+    <span id="status" class="text-sm text-gray-400">Ready</span>
+  </div>
+
+  <!-- Controls -->
+  <div class="bg-gray-800 rounded-lg p-6 space-y-4">
+    <div class="flex items-center gap-4">
+      <button id="btn-listen" onclick="toggleListening()"
+        class="px-6 py-3 rounded-lg font-semibold text-lg transition-all bg-indigo-600 hover:bg-indigo-500 text-white">
+        Start Listening
+      </button>
+      <div id="level-container" class="flex-1 h-8 bg-gray-700 rounded-lg overflow-hidden hidden">
+        <div id="level-bar" class="h-full bg-green-500 transition-all duration-100" style="width: 0%"></div>
+      </div>
+    </div>
+    <div class="flex items-center gap-4 text-sm text-gray-400">
+      <label>Chunk duration:
+        <select id="chunk-duration" class="bg-gray-700 text-white rounded px-2 py-1 ml-1">
+          <option value="3">3s</option>
+          <option value="5" selected>5s</option>
+          <option value="10">10s</option>
+        </select>
+      </label>
+      <span id="timer" class="font-mono">0.0s</span>
+    </div>
+  </div>
+
+  <!-- Live Results -->
+  <div id="results-container" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg p-6 text-center text-gray-500" id="placeholder">
+      Click "Start Listening" to let the brain hear through your microphone
+    </div>
+  </div>
+
+  <!-- History -->
+  <div id="history" class="space-y-3"></div>
+</div>
+
+<script>
+let listening = false;
+let audioContext = null;
+let mediaStream = null;
+let workletNode = null;
+let audioBuffer = [];
+let chunkTimer = null;
+let startTime = 0;
+let timerInterval = null;
+
+async function toggleListening() {
+  if (listening) {
+    stopListening();
+  } else {
+    await startListening();
+  }
+}
+
+async function startListening() {
+  setStatus('Requesting microphone...', 'text-yellow-400');
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+    });
+  } catch (e) {
+    setStatus('Microphone access denied: ' + e.message, 'text-red-400');
+    console.error('getUserMedia error:', e);
+    return;
+  }
+
+  try {
+    audioContext = new AudioContext({ sampleRate: 16000 });
+    // Resume audio context (required after user gesture in some browsers)
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+  } catch (e) {
+    // Fallback: browser may not support 16kHz, use default
+    audioContext = new AudioContext();
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+  }
+  const source = audioContext.createMediaStreamSource(mediaStream);
+
+  // Use ScriptProcessor for broad compatibility (AudioWorklet needs HTTPS + module)
+  const bufferSize = 4096;
+  const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+  audioBuffer = [];
+
+  const actualSampleRate = audioContext.sampleRate;
+  console.log('AudioContext sample rate:', actualSampleRate);
+
+  processor.onaudioprocess = (e) => {
+    const data = e.inputBuffer.getChannelData(0);
+    audioBuffer.push(new Float32Array(data));
+    updateLevel(data);
+  };
+
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+  workletNode = processor;
+
+  listening = true;
+  startTime = Date.now();
+  document.getElementById('btn-listen').textContent = 'Stop Listening';
+  document.getElementById('btn-listen').classList.replace('bg-indigo-600', 'bg-red-600');
+  document.getElementById('btn-listen').classList.replace('hover:bg-indigo-500', 'hover:bg-red-500');
+  document.getElementById('level-container').classList.remove('hidden');
+  document.getElementById('placeholder').classList.add('hidden');
+  setStatus('Listening...', 'text-green-400');
+
+  // Start chunk timer
+  const chunkSec = parseInt(document.getElementById('chunk-duration').value);
+  chunkTimer = setInterval(() => processChunk(), chunkSec * 1000);
+  timerInterval = setInterval(updateTimer, 100);
+}
+
+function stopListening() {
+  listening = false;
+  if (chunkTimer) clearInterval(chunkTimer);
+  if (timerInterval) clearInterval(timerInterval);
+  if (workletNode) workletNode.disconnect();
+  if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+  if (audioContext) audioContext.close();
+  audioBuffer = [];
+
+  document.getElementById('btn-listen').textContent = 'Start Listening';
+  document.getElementById('btn-listen').classList.replace('bg-red-600', 'bg-indigo-600');
+  document.getElementById('btn-listen').classList.replace('hover:bg-red-500', 'hover:bg-indigo-500');
+  document.getElementById('level-container').classList.add('hidden');
+  setStatus('Stopped', 'text-gray-400');
+}
+
+function updateLevel(data) {
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+  const rms = Math.sqrt(sum / data.length);
+  const pct = Math.min(100, rms * 500);
+  const bar = document.getElementById('level-bar');
+  bar.style.width = pct + '%';
+  bar.className = 'h-full transition-all duration-100 ' +
+    (pct > 60 ? 'bg-red-500' : pct > 30 ? 'bg-yellow-500' : 'bg-green-500');
+}
+
+function updateTimer() {
+  const elapsed = (Date.now() - startTime) / 1000;
+  document.getElementById('timer').textContent = elapsed.toFixed(1) + 's';
+}
+
+async function processChunk() {
+  if (audioBuffer.length === 0) return;
+
+  // Concatenate buffered audio
+  const totalLen = audioBuffer.reduce((s, b) => s + b.length, 0);
+  const combined = new Float32Array(totalLen);
+  let offset = 0;
+  for (const buf of audioBuffer) {
+    combined.set(buf, offset);
+    offset += buf.length;
+  }
+  audioBuffer = []; // reset for next chunk
+
+  // Check if audio has any energy
+  let energy = 0;
+  for (let i = 0; i < combined.length; i++) energy += combined[i] * combined[i];
+  if (energy / combined.length < 1e-8) {
+    addResult('silence', null, combined.length / 16000);
+    return;
+  }
+
+  setStatus('Processing...', 'text-yellow-400');
+
+  // Convert Float32Array to base64
+  const bytes = new Uint8Array(combined.buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const b64 = btoa(binary);
+
+  try {
+    const resp = await fetch('/api/listen/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio_b64: b64, sample_rate: audioContext ? audioContext.sampleRate : 16000, top_k: 10 }),
+    });
+    const data = await resp.json();
+
+    if (data.summary) {
+      addResult('heard', data, combined.length / 16000);
+    } else {
+      addResult('error', data, combined.length / 16000);
+    }
+  } catch (e) {
+    addResult('error', { error: e.message }, combined.length / 16000);
+  }
+
+  if (listening) setStatus('Listening...', 'text-green-400');
+}
+
+function addResult(type, data, duration) {
+  const history = document.getElementById('history');
+  const card = document.createElement('div');
+  card.className = 'bg-gray-800 rounded-lg p-4 animate-fade-in';
+
+  const time = new Date().toLocaleTimeString();
+
+  if (type === 'silence') {
+    card.innerHTML = `<div class="text-gray-500 text-sm">${time} — silence (${duration.toFixed(1)}s)</div>`;
+  } else if (type === 'error') {
+    card.innerHTML = `<div class="text-red-400 text-sm">${time} — error: ${JSON.stringify(data?.error || data)}</div>`;
+  } else {
+    const s = data.summary;
+    const hearLabels = (s.i_hear || []).join(', ') || 'nothing distinct';
+    const crossLabels = (s.which_reminds_me_of || []).join(', ');
+    const transcript = s.transcription || '';
+
+    let html = `
+      <div class="flex items-start justify-between mb-2">
+        <div class="text-sm text-gray-400">${time} — ${s.audio_duration}s audio, processed in ${s.process_time}s</div>
+      </div>
+      <div class="space-y-2">`;
+
+    if (transcript) {
+      html += `
+        <div>
+          <span class="text-amber-400 font-semibold">Words:</span>
+          <span class="text-white italic">"${transcript}"</span>
+        </div>`;
+    }
+
+    const clapLabels = (s.clap_labels || []).join(', ');
+    if (clapLabels) {
+      html += `
+        <div>
+          <span class="text-cyan-400 font-semibold">Sound (CLAP):</span>
+          <span class="text-white">${clapLabels}</span>
+        </div>`;
+    }
+
+    html += `
+        <div>
+          <span class="text-indigo-400 font-semibold">I hear:</span>
+          <span class="text-white">${hearLabels}</span>
+        </div>`;
+
+    // Imagination results (when speech is detected)
+    const imagination = data.associations?.imagination;
+    if (imagination) {
+      html += `
+        <div class="mt-1 p-2 bg-amber-900/20 border border-amber-700/30 rounded">
+          <span class="text-amber-400 font-semibold text-xs">Imagining:</span>
+          <span class="text-xs text-gray-400">keywords: ${(imagination.keywords || []).join(', ')}</span>
+          <div class="text-white text-sm mt-1">Concepts: ${(imagination.concepts || []).join(', ')}</div>`;
+      if (imagination.predicted_sounds?.length > 0) {
+        html += `<div class="text-purple-300 text-sm">Sounds like: ${imagination.predicted_sounds.join(', ')}</div>`;
+      }
+      if (imagination.causal_next?.length > 0) {
+        html += `<div class="text-red-300 text-sm">Leads to: ${imagination.causal_next.join(', ')}</div>`;
+      }
+      html += `</div>`;
+    }
+
+    if (crossLabels) {
+      html += `
+        <div>
+          <span class="text-purple-400 font-semibold">Which reminds me of:</span>
+          <span class="text-white">${crossLabels}</span>
+        </div>`;
+    }
+
+    if (s.narration) {
+      html += `
+        <div class="mt-2 p-3 bg-gray-900 rounded border border-gray-700 italic text-gray-200">
+          "${s.narration}"
+        </div>`;
+    }
+
+    // Show top matches as small chips
+    const audioMatches = data.associations?.audio_similar || [];
+    if (audioMatches.length > 0) {
+      html += `<div class="flex flex-wrap gap-1 mt-2">`;
+      for (const m of audioMatches.slice(0, 8)) {
+        const pct = (m.similarity * 100).toFixed(0);
+        const bg = m.similarity > 0.5 ? 'bg-indigo-900' : 'bg-gray-700';
+        html += `<span class="${bg} text-xs px-2 py-0.5 rounded text-gray-300">${m.label} (${pct}%)</span>`;
+      }
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+    card.innerHTML = html;
+  }
+
+  // Prepend (newest first)
+  history.insertBefore(card, history.firstChild);
+
+  // Keep max 20 entries
+  while (history.children.length > 20) {
+    history.removeChild(history.lastChild);
+  }
+}
+
+function setStatus(text, colorClass) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = 'text-sm ' + colorClass;
+}
+</script>
+
+<style>
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fade-in 0.3s ease-out; }
+</style>
+{% endblock %}

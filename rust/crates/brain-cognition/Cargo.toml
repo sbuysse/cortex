@@ -1,0 +1,21 @@
+[package]
+name = "brain-cognition"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brain-inference = { path = "../brain-inference" }
+brain-db = { path = "../brain-db" }
+rusqlite = { workspace = true }
+# Use ndarray WITHOUT blas feature to avoid linking issues
+# Our operations are small vectors (512-dim), BLAS overhead isn't needed
+ndarray = "0.16"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+regex-lite = "0.1"
+urlencoding = "2"

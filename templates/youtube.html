@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}YouTube Brain{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto space-y-6">
+    <!-- Header -->
+    <div>
+        <h2 class="text-2xl font-bold">YouTube Brain Interaction</h2>
+        <p class="text-gray-400 mt-1">Feed the brain a YouTube video and see what it associates with it</p>
+    </div>
+
+    <!-- URL Input -->
+    <div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+        <div class="flex gap-4">
+            <input id="youtube-url" type="text" placeholder="Paste a YouTube URL..."
+                   class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent mono text-sm"
+                   onkeydown="if(event.key==='Enter') processVideo()">
+            <button onclick="processVideo()" id="process-btn"
+                    class="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                <span id="btn-icon">&#9654;</span>
+                <span id="btn-text">Process</span>
+            </button>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">The brain will extract visual and audio features, then find associations across 24K VGGSound clips</p>
+    </div>
+
+    <!-- Processing Status -->
+    <div id="status-area" class="hidden">
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+            <h3 class="text-lg font-semibold mb-4">Processing Pipeline</h3>
+            <div id="pipeline-stages" class="space-y-3">
+            </div>
+        </div>
+    </div>
+
+    <!-- Video Info -->
+    <div id="video-info" class="hidden">
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+            <div class="flex items-start gap-4">
+                <div id="video-thumbnail" class="w-48 h-28 bg-gray-800 rounded-lg flex items-center justify-center text-gray-600 overflow-hidden">
+                    <img id="thumb-img" class="w-full h-full object-cover hidden">
+                    <span id="thumb-placeholder">No thumbnail</span>
+                </div>
+                <div>
+                    <h3 id="video-title" class="text-lg font-semibold"></h3>
+                    <p id="video-duration" class="text-sm text-gray-400 mt-1"></p>
+                    <p id="video-timing" class="text-xs text-gray-500 mt-2 mono"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results -->
+    <div id="results-area" class="hidden space-y-6">
+        <!-- Visual Associations -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+            <h3 class="text-lg font-semibold mb-1 flex items-center gap-2">
+                <span class="text-blue-400">&#128065;</span> Visual Associations
+            </h3>
+            <p class="text-xs text-gray-500 mb-4">What the brain sees — clips with the most similar visual features</p>
+            <div id="visual-results" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            </div>
+        </div>
+
+        <!-- Audio Associations -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+            <h3 class="text-lg font-semibold mb-1 flex items-center gap-2">
+                <span class="text-purple-400">&#127925;</span> Audio Associations
+            </h3>
+            <p class="text-xs text-gray-500 mb-4">What the brain hears — clips with the most similar audio features</p>
+            <div id="audio-results" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            </div>
+        </div>
+
+        <!-- Cross-Modal Associations -->
+        <div class="bg-gray-900 rounded-xl border border-emerald-800/50 p-6">
+            <h3 class="text-lg font-semibold mb-1 flex items-center gap-2">
+                <span class="text-emerald-400">&#129504;</span> Cross-Modal Associations
+            </h3>
+            <p class="text-xs text-gray-500 mb-4">What sounds the brain associates with the visuals — the cross-modal bridge</p>
+            <div id="cross-results" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const YOUTUBE_API = '';
+
+function makeResultCard(item, colorClass) {
+    const pct = (item.similarity * 100).toFixed(1);
+    const barWidth = Math.min(Math.max(item.similarity * 100, 5), 100);
+    const ytUrl = `https://www.youtube.com/watch?v=${item.youtube_id}&t=${item.start_sec}`;
+    return `
+        <a href="${ytUrl}" target="_blank" class="block bg-gray-800/50 rounded-lg p-3 hover:bg-gray-800 transition-colors group">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-sm font-medium text-gray-200 group-hover:text-white">${item.label}</span>
+                <span class="text-xs mono ${colorClass}">${pct}%</span>
+            </div>
+            <div class="w-full bg-gray-700 rounded-full h-1.5">
+                <div class="${colorClass.replace('text-', 'bg-')} h-1.5 rounded-full" style="width: ${barWidth}%"></div>
+            </div>
+            <div class="text-xs text-gray-500 mt-1.5 mono">${item.youtube_id} @ ${item.start_sec}s</div>
+        </a>
+    `;
+}
+
+function renderStage(name, status, time) {
+    const icons = {
+        download: '&#11015;&#65039;',
+        visual_encode: '&#128065;',
+        audio_encode: '&#127925;',
+        brain_association: '&#129504;'
+    };
+    const labels = {
+        download: 'Downloading video',
+        visual_encode: 'Encoding visual features (DINOv2)',
+        audio_encode: 'Encoding audio features (Whisper)',
+        brain_association: 'Finding brain associations'
+    };
+    const statusColors = {
+        running: 'text-yellow-400',
+        done: 'text-emerald-400',
+        fallback: 'text-orange-400',
+        pending: 'text-gray-600'
+    };
+    const statusIcons = {
+        running: '<span class="pulse-dot">&#9679;</span>',
+        done: '&#10003;',
+        fallback: '&#9888;',
+        pending: '&#9675;'
+    };
+
+    return `
+        <div class="flex items-center gap-3 ${status === 'pending' ? 'opacity-40' : ''}">
+            <span class="text-lg">${icons[name] || '&#9679;'}</span>
+            <span class="flex-1 text-sm">${labels[name] || name}</span>
+            <span class="${statusColors[status] || 'text-gray-500'} text-sm">${statusIcons[status] || ''}</span>
+            ${time ? `<span class="text-xs mono text-gray-500">${time}</span>` : ''}
+        </div>
+    `;
+}
+
+async function processVideo() {
+    const url = document.getElementById('youtube-url').value.trim();
+    if (!url) return;
+
+    const btn = document.getElementById('process-btn');
+    btn.disabled = true;
+    document.getElementById('btn-text').textContent = 'Processing...';
+    document.getElementById('btn-icon').innerHTML = '<span class="pulse-dot">&#9679;</span>';
+
+    // Show status area
+    const statusArea = document.getElementById('status-area');
+    statusArea.classList.remove('hidden');
+    document.getElementById('results-area').classList.add('hidden');
+    document.getElementById('video-info').classList.add('hidden');
+
+    // Show initial pipeline stages
+    const stages = document.getElementById('pipeline-stages');
+    stages.innerHTML = [
+        renderStage('download', 'running'),
+        renderStage('visual_encode', 'pending'),
+        renderStage('audio_encode', 'pending'),
+        renderStage('brain_association', 'pending')
+    ].join('');
+
+    try {
+        const resp = await fetch(YOUTUBE_API + '/api/youtube/process', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({url: url, top_k: 15})
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || 'Processing failed');
+        }
+
+        const data = await resp.json();
+
+        // Update pipeline stages
+        stages.innerHTML = data.stages.map(s => renderStage(s.name, s.status, s.time)).join('');
+
+        // Show video info
+        if (data.video_info) {
+            document.getElementById('video-info').classList.remove('hidden');
+            document.getElementById('video-title').textContent = data.video_info.title || 'Video';
+            const dur = data.video_info.duration ? `${Math.round(data.video_info.duration)}s` : '';
+            const res = data.video_info.width ? `${data.video_info.width}x${data.video_info.height}` : '';
+            document.getElementById('video-duration').textContent = [dur, res].filter(Boolean).join(' | ');
+            document.getElementById('video-timing').textContent = `Total processing: ${data.total_time}`;
+
+            // Try to show YouTube thumbnail
+            const ytId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/);
+            if (ytId) {
+                const thumbImg = document.getElementById('thumb-img');
+                thumbImg.src = `https://img.youtube.com/vi/${ytId[1]}/mqdefault.jpg`;
+                thumbImg.classList.remove('hidden');
+                document.getElementById('thumb-placeholder').classList.add('hidden');
+            }
+        }
+
+        // Show results
+        if (data.associations) {
+            document.getElementById('results-area').classList.remove('hidden');
+
+            const vr = document.getElementById('visual-results');
+            vr.innerHTML = data.associations.visual_similar.map(
+                item => makeResultCard(item, 'text-blue-400')
+            ).join('');
+
+            const ar = document.getElementById('audio-results');
+            ar.innerHTML = data.associations.audio_similar.map(
+                item => makeResultCard(item, 'text-purple-400')
+            ).join('');
+
+            const cr = document.getElementById('cross-results');
+            cr.innerHTML = data.associations.cross_modal.map(
+                item => makeResultCard(item, 'text-emerald-400')
+            ).join('');
+        }
+
+    } catch (err) {
+        stages.innerHTML += `<div class="text-red-400 text-sm mt-2">Error: ${err.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        document.getElementById('btn-text').textContent = 'Process';
+        document.getElementById('btn-icon').innerHTML = '&#9654;';
+    }
+}
+</script>
+{% endblock %}

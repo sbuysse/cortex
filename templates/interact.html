@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+{% block title %}Interact{% endblock %}
+
+{% block content %}
+<div class="p-8 max-w-6xl mx-auto">
+    <h2 class="text-2xl font-bold mb-2">Interact with the Brain</h2>
+    <p class="text-gray-500 mb-6">Pick a clip and see what the brain associates across all modalities: vision, audio, emotion, speech, and scene properties.</p>
+
+    <!-- Controls -->
+    <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+        <div class="flex flex-wrap items-end gap-4">
+            <!-- Source modality -->
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Query from</label>
+                <select id="source" class="bg-gray-800 text-gray-200 border border-gray-700 rounded-lg px-3 py-2 text-sm">
+                    <option value="vision">Vision</option>
+                    <option value="audio">Audio</option>
+                    <option value="emotion">Emotion</option>
+                    <option value="speech">Speech</option>
+                    <option value="properties">Properties</option>
+                </select>
+            </div>
+
+            <!-- Label filter -->
+            <div class="flex-1 min-w-[200px] relative">
+                <label class="block text-xs text-gray-500 mb-1">Filter by label</label>
+                <input id="label-filter" type="text" placeholder="Type to search labels..."
+                    class="w-full bg-gray-800 text-gray-200 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+                    autocomplete="off" />
+                <div id="label-dropdown" class="hidden absolute z-50 bg-gray-800 border border-gray-700 rounded-lg mt-1 max-h-48 overflow-y-auto shadow-xl w-full"></div>
+            </div>
+
+            <!-- Top-K -->
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Results</label>
+                <select id="top-k" class="bg-gray-800 text-gray-200 border border-gray-700 rounded-lg px-3 py-2 text-sm">
+                    <option value="5" selected>5</option>
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                </select>
+            </div>
+
+            <!-- Buttons -->
+            <button onclick="randomQuery()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                Random Clip
+            </button>
+            <button onclick="queryClip()" id="btn-query" disabled
+                class="bg-emerald-700 hover:bg-emerald-600 disabled:bg-gray-700 disabled:text-gray-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                Query Selected
+            </button>
+        </div>
+    </div>
+
+    <!-- Query clip info -->
+    <div id="query-card" class="hidden bg-gray-900 rounded-xl border border-gray-800 mb-6 p-5">
+        <div class="flex items-center justify-between">
+            <div>
+                <span class="text-xs text-gray-500">Query Clip</span>
+                <div class="flex items-center gap-3 mt-1">
+                    <span id="q-idx" class="text-sm font-mono text-gray-500"></span>
+                    <span id="q-label" class="text-lg font-semibold text-indigo-400"></span>
+                    <span id="q-source" class="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded"></span>
+                </div>
+            </div>
+            <div id="q-modalities" class="flex gap-1"></div>
+        </div>
+    </div>
+
+    <!-- Multi-modality results -->
+    <div id="results-area" class="hidden">
+        <div id="modality-results" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"></div>
+    </div>
+
+    <!-- Empty state -->
+    <div id="empty-state" class="bg-gray-900 rounded-xl border border-gray-800 p-12 text-center">
+        <div class="text-gray-600 text-sm">Click "Random Clip" or search for a label to explore cross-modal associations</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allLabels = [];
+let selectedIdx = null;
+
+const MODALITY_COLORS = {
+    vision: {bg: 'bg-blue-900/30', border: 'border-blue-800/50', text: 'text-blue-400', bar: 'bg-blue-600', icon: 'eye'},
+    audio: {bg: 'bg-purple-900/30', border: 'border-purple-800/50', text: 'text-purple-400', bar: 'bg-purple-600', icon: 'volume-2'},
+    emotion: {bg: 'bg-rose-900/30', border: 'border-rose-800/50', text: 'text-rose-400', bar: 'bg-rose-600', icon: 'heart'},
+    speech: {bg: 'bg-amber-900/30', border: 'border-amber-800/50', text: 'text-amber-400', bar: 'bg-amber-600', icon: 'message-circle'},
+    properties: {bg: 'bg-emerald-900/30', border: 'border-emerald-800/50', text: 'text-emerald-400', bar: 'bg-emerald-600', icon: 'layers'},
+};
+
+const MODALITY_LABELS = {
+    vision: 'Vision', audio: 'Audio', emotion: 'Emotion',
+    speech: 'Speech', properties: 'Properties',
+};
+
+// Load labels
+async function loadLabels() {
+    try {
+        const r = await fetch('/api/interact/labels');
+        const d = await r.json();
+        if (d.error) return;
+        allLabels = d.labels;
+
+        // Disable unavailable modalities in source selector
+        const src = document.getElementById('source');
+        if (d.modalities) {
+            Array.from(src.options).forEach(opt => {
+                if (!d.modalities.includes(opt.value)) {
+                    opt.disabled = true;
+                    opt.textContent += ' (n/a)';
+                }
+            });
+        }
+    } catch(e) { console.error(e); }
+}
+
+// Label autocomplete
+const filterInput = document.getElementById('label-filter');
+const dropdown = document.getElementById('label-dropdown');
+let searchTimeout = null;
+
+filterInput.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    const q = filterInput.value;
+    if (q.length < 2) { dropdown.classList.add('hidden'); return; }
+    searchTimeout = setTimeout(async () => {
+        try {
+            const r = await fetch(`/api/interact/search?q=${encodeURIComponent(q)}`);
+            const d = await r.json();
+            if (!d.results || d.results.length === 0) { dropdown.classList.add('hidden'); return; }
+            dropdown.innerHTML = d.results.map(m =>
+                `<div class="px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 cursor-pointer" data-idx="${m.sample_idx}" data-label="${m.label.replace(/"/g, '&quot;')}">
+                    ${m.label} <span class="text-gray-600 text-xs">(${m.count} clips)</span>
+                </div>`
+            ).join('');
+            dropdown.querySelectorAll('div').forEach(el => {
+                el.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    selectedIdx = parseInt(el.dataset.idx);
+                    filterInput.value = el.dataset.label;
+                    dropdown.classList.add('hidden');
+                    document.getElementById('btn-query').disabled = false;
+                    queryClipIdx(selectedIdx);
+                });
+            });
+            dropdown.classList.remove('hidden');
+        } catch(e) { console.error(e); }
+    }, 200);
+});
+filterInput.addEventListener('blur', () => setTimeout(() => dropdown.classList.add('hidden'), 200));
+
+async function queryClipIdx(idx) {
+    const source = document.getElementById('source').value;
+    const topK = document.getElementById('top-k').value;
+    try {
+        const r = await fetch(`/api/interact/retrieve?idx=${idx}&source=${source}&top_k=${topK}`);
+        const d = await r.json();
+        if (d.error) { showError(d.error); return; }
+        selectedIdx = d.query_idx;
+        renderResults(d);
+    } catch(e) { showError('Failed: ' + e.message); }
+}
+
+async function randomQuery() {
+    const source = document.getElementById('source').value;
+    const topK = document.getElementById('top-k').value;
+    try {
+        const r = await fetch(`/api/interact/random?source=${source}&top_k=${topK}`);
+        const d = await r.json();
+        if (d.error) { showError(d.error); return; }
+        selectedIdx = d.query_idx;
+        document.getElementById('btn-query').disabled = false;
+        renderResults(d);
+    } catch(e) { showError('Failed: ' + e.message); }
+}
+
+async function queryClip() {
+    if (selectedIdx === null) return;
+    queryClipIdx(selectedIdx);
+}
+
+function renderResults(data) {
+    document.getElementById('empty-state').classList.add('hidden');
+    document.getElementById('results-area').classList.remove('hidden');
+
+    // Query card
+    const qCard = document.getElementById('query-card');
+    qCard.classList.remove('hidden');
+    document.getElementById('q-idx').textContent = `#${data.query_idx}`;
+    document.getElementById('q-label').textContent = data.query_label;
+    document.getElementById('q-source').textContent = MODALITY_LABELS[data.source] || data.source;
+
+    // Modality badges
+    const modsEl = document.getElementById('q-modalities');
+    modsEl.innerHTML = (data.modalities || []).map(m => {
+        const c = MODALITY_COLORS[m] || {};
+        const active = m !== data.source && data.associations && data.associations[m];
+        return `<span class="text-xs px-2 py-0.5 rounded ${active ? c.text + ' ' + c.bg : 'text-gray-600 bg-gray-800'}">${MODALITY_LABELS[m] || m}</span>`;
+    }).join('');
+
+    // Render association panels for each target modality
+    const container = document.getElementById('modality-results');
+    container.innerHTML = '';
+
+    if (!data.associations) return;
+
+    const modOrder = ['vision', 'audio', 'emotion', 'speech', 'properties'];
+    for (const mod of modOrder) {
+        if (mod === data.source) continue;
+        const results = data.associations[mod];
+        if (!results) continue;
+
+        const c = MODALITY_COLORS[mod] || {};
+        const maxSim = results.length > 0 ? Math.max(...results.map(r => r.similarity)) : 1;
+
+        const panel = document.createElement('div');
+        panel.className = `bg-gray-900 rounded-xl border ${c.border} overflow-hidden`;
+        panel.innerHTML = `
+            <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between ${c.bg}">
+                <h3 class="text-sm font-semibold ${c.text}">${MODALITY_LABELS[mod]}</h3>
+                <span class="text-xs text-gray-500">${results.length} results</span>
+            </div>
+            <div class="divide-y divide-gray-800/50">
+                ${results.map((r, i) => {
+                    const barWidth = maxSim > 0 ? (r.similarity / maxSim * 100) : 0;
+                    const isMatch = r.label === data.query_label;
+                    const matchBadge = isMatch ? `<span class="ml-1 text-[10px] bg-emerald-900 text-emerald-300 px-1.5 py-0 rounded-full">match</span>` : '';
+                    return `
+                        <div class="px-4 py-2.5 hover:bg-gray-800/30 cursor-pointer" onclick="selectedIdx=${r.idx}; document.getElementById('btn-query').disabled=false; queryClipIdx(${r.idx});">
+                            <div class="flex items-center justify-between mb-1">
+                                <div class="flex items-center gap-1.5 min-w-0">
+                                    <span class="text-[10px] font-mono text-gray-600 w-4 flex-shrink-0">${i+1}</span>
+                                    <span class="text-xs font-medium truncate ${isMatch ? 'text-emerald-400' : 'text-gray-300'}">${r.label}</span>
+                                    ${matchBadge}
+                                </div>
+                                <span class="text-[10px] font-mono text-gray-500 ml-2 flex-shrink-0">${r.similarity.toFixed(3)}</span>
+                            </div>
+                            <div class="ml-5 h-1 bg-gray-800 rounded-full overflow-hidden">
+                                <div class="h-full rounded-full ${c.bar}" style="width:${barWidth}%"></div>
+                            </div>
+                        </div>`;
+                }).join('')}
+            </div>`;
+        container.appendChild(panel);
+    }
+}
+
+function showError(msg) {
+    document.getElementById('empty-state').classList.remove('hidden');
+    document.getElementById('results-area').classList.add('hidden');
+    document.getElementById('empty-state').innerHTML =
+        `<div class="text-red-400 text-sm">${msg}</div>`;
+}
+
+loadLabels();
+</script>
+{% endblock %}

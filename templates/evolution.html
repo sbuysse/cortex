@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Code Evolution{% endblock %}
+
+{% block content %}
+<div class="p-8 max-w-7xl mx-auto">
+    <h2 class="text-2xl font-bold mb-6">Code Evolution</h2>
+
+    <!-- Stats cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Total Mutations</div>
+            <div class="text-3xl font-bold text-purple-400">{{ mutation_stats.total | default(value=0) }}</div>
+        </div>
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Accepted</div>
+            <div class="text-3xl font-bold text-emerald-400">{{ mutation_stats.accepted | default(value=0) }}</div>
+            <div class="text-xs text-gray-500 mt-1">{{ mutation_stats.acceptance_rate | default(value=0) | pct }} rate</div>
+        </div>
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Cumulative Improvement</div>
+            <div class="text-3xl font-bold text-amber-400">
+                {% if trajectory %}+{{ last_cumulative_delta | default(value=0) | round4 }}{% else %}—{% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- By target breakdown -->
+    {% if mutation_stats.by_target %}
+    <div class="bg-gray-900 rounded-xl p-5 border border-gray-800 mb-8">
+        <h3 class="text-sm font-semibold text-gray-400 mb-4">Mutations by Target</h3>
+        <div class="space-y-3">
+            {% for t in mutation_stats.by_target %}
+            <div class="flex items-center gap-4">
+                <div class="w-56 text-sm mono text-gray-300">{{ t.target_name }}</div>
+                <div class="flex-1">
+                    <div class="flex items-center gap-2">
+                        <div class="w-full bg-gray-800 rounded-full h-3">
+                            {% set total = t.cnt %}
+                            {% set acc = t.accepted_cnt %}
+                            {% if total > 0 %}
+                                {% set pct_val = acc / total * 100 %}
+                            {% else %}
+                                {% set pct_val = 0 %}
+                            {% endif %}
+                            <div class="bg-emerald-600 h-3 rounded-full" style="width: {{ pct_val }}%"></div>
+                        </div>
+                        <span class="text-xs text-gray-500 w-24">{{ acc }}/{{ total }}</span>
+                    </div>
+                </div>
+                <div class="text-sm mono {% if t.avg_delta and t.avg_delta > 0 %}text-emerald-400{% elif t.avg_delta and t.avg_delta < 0 %}text-red-400{% else %}text-gray-500{% endif %}">
+                    {{ t.avg_delta | default(value=0) | round4 }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Evolution trajectory chart -->
+    {% if trajectory %}
+    <div class="bg-gray-900 rounded-xl p-5 border border-gray-800 mb-8">
+        <h3 class="text-sm font-semibold text-gray-400 mb-4">Evolution Trajectory</h3>
+        <canvas id="trajectory-chart" height="150"></canvas>
+    </div>
+    {% endif %}
+
+    <!-- Recent mutations -->
+    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-800">
+            <h3 class="text-sm font-semibold text-gray-400">Recent Mutations</h3>
+        </div>
+        {% if recent_mutations %}
+        <div class="divide-y divide-gray-800">
+            {% for m in recent_mutations %}
+            <details class="group">
+                <summary class="px-5 py-3 cursor-pointer hover:bg-gray-800/50 transition-colors flex items-center gap-3">
+                    {% if m.accepted %}
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></span>
+                    {% else %}
+                    <span class="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"></span>
+                    {% endif %}
+                    <span class="mono text-sm text-gray-300 flex-shrink-0">{{ m.target_name }}</span>
+                    <span class="text-sm mono {% if m.score_delta and m.score_delta > 0 %}text-emerald-400{% elif m.score_delta and m.score_delta < 0 %}text-red-400{% else %}text-gray-500{% endif %}">
+                        {{ m.score_delta | default(value=0) | round4 }}
+                    </span>
+                    <span class="text-xs text-gray-600 ml-auto">#{{ m.id }}</span>
+                </summary>
+                <div class="px-5 py-4 bg-gray-950 border-t border-gray-800">
+                    {% if m.diff %}
+                    <h4 class="text-xs text-gray-500 uppercase tracking-wider mb-2">Diff</h4>
+                    <pre class="text-xs overflow-x-auto p-3 bg-gray-900 rounded-lg mb-4 max-h-96 overflow-y-auto">{% for line in m.diff_lines %}{% if line.is_add %}<span class="diff-add">{{ line.text }}</span>
+{% elif line.is_del %}<span class="diff-del">{{ line.text }}</span>
+{% else %}{{ line.text }}
+{% endif %}{% endfor %}</pre>
+                    {% endif %}
+                </div>
+            </details>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="px-5 py-8 text-center text-gray-600">
+            No mutations yet. Code evolution begins after the HPO warmup phase.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if trajectory %}
+<script>
+const traj = {{ trajectory | json_encode() | safe }};
+new Chart(document.getElementById('trajectory-chart'), {
+    type: 'line',
+    data: {
+        labels: traj.map(t => '#' + t.mutation_id),
+        datasets: [{
+            label: 'Cumulative Δ',
+            data: traj.map(t => t.cumulative_delta),
+            borderColor: '#a855f7',
+            backgroundColor: 'rgba(168, 85, 247, 0.1)',
+            fill: true,
+            tension: 0.3,
+        }],
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: '#9ca3af' } } },
+        scales: {
+            x: { ticks: { color: '#6b7280' }, grid: { color: '#1f2937' } },
+            y: { ticks: { color: '#6b7280' }, grid: { color: '#1f2937' } },
+        },
+    },
+});
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}Talk to the Brain{% endblock %}
+
+{% block content %}
+<div class="flex flex-col h-full max-w-4xl mx-auto">
+    <!-- Header -->
+    <div class="p-6 pb-3">
+        <h2 class="text-2xl font-bold">Talk to the Brain</h2>
+        <p class="text-gray-400 mt-1 text-sm">Chat with the associative brain about what it perceives and remembers from 24K video clips</p>
+    </div>
+
+    <!-- Chat messages -->
+    <div id="chat-messages" class="flex-1 overflow-y-auto px-6 space-y-4 pb-4">
+        <!-- Welcome message -->
+        <div class="flex gap-3">
+            <div class="w-8 h-8 rounded-full bg-emerald-900/50 flex items-center justify-center flex-shrink-0 mt-1">
+                <span class="text-emerald-400 text-sm">&#129504;</span>
+            </div>
+            <div class="bg-gray-900 rounded-xl rounded-tl-sm p-4 border border-gray-800 max-w-2xl">
+                <p class="text-gray-300 text-sm leading-relaxed">
+                    Hello! I'm an associative brain that learned connections between vision and audio from 24,000 video clips.
+                    Ask me anything — what sounds I associate with certain scenes, what I remember, or show me a YouTube video and I'll tell you what I perceive.
+                </p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                    <button onclick="quickAsk('What sounds do you associate with dogs?')" class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-colors">What sounds go with dogs?</button>
+                    <button onclick="quickAsk('What do you see when you hear piano music?')" class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-colors">What do you see with piano?</button>
+                    <button onclick="quickAsk('What are your strongest cross-modal associations?')" class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-colors">Strongest associations?</button>
+                    <button onclick="quickAsk('Describe what you know about rain')" class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-colors">Tell me about rain</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="p-6 pt-3 border-t border-gray-800">
+        <!-- YouTube URL toggle -->
+        <div id="youtube-input" class="hidden mb-3">
+            <div class="flex gap-2">
+                <input id="yt-url" type="text" placeholder="Paste YouTube URL..."
+                       class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                <button onclick="processAndDescribe()" id="yt-btn"
+                        class="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
+                    Show Brain
+                </button>
+            </div>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="toggleYoutube()" id="yt-toggle"
+                    class="p-2.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-colors flex-shrink-0" title="Show a YouTube video">
+                &#127909;
+            </button>
+            <input id="chat-input" type="text" placeholder="Ask the brain anything..."
+                   class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                   onkeydown="if(event.key==='Enter' && !event.shiftKey) sendMessage()">
+            <button onclick="sendMessage()" id="send-btn"
+                    class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                Send
+            </button>
+        </div>
+        <div class="flex items-center justify-between mt-2">
+            <p class="text-xs text-gray-600">The brain uses its 24K clip memory to answer. Powered by associative recall + Ollama LLM.</p>
+            <button onclick="clearChat()" class="text-xs text-gray-600 hover:text-gray-400 transition-colors">Clear chat</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const SESSION_ID = 'chat_' + Date.now();
+let lastAssociations = null;
+
+function addMessage(role, content, extra) {
+    const container = document.getElementById('chat-messages');
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex gap-3' + (role === 'user' ? ' justify-end' : '');
+
+    if (role === 'user') {
+        wrapper.innerHTML = `
+            <div class="bg-blue-900/30 rounded-xl rounded-tr-sm p-4 border border-blue-800/30 max-w-2xl">
+                <p class="text-gray-200 text-sm leading-relaxed">${escapeHtml(content)}</p>
+            </div>
+            <div class="w-8 h-8 rounded-full bg-blue-900/50 flex items-center justify-center flex-shrink-0 mt-1">
+                <span class="text-blue-400 text-sm">&#128100;</span>
+            </div>`;
+    } else {
+        let extraHtml = '';
+        if (extra) {
+            extraHtml = `<div class="mt-2 pt-2 border-t border-gray-800 text-xs text-gray-600 mono">${escapeHtml(extra)}</div>`;
+        }
+        wrapper.innerHTML = `
+            <div class="w-8 h-8 rounded-full bg-emerald-900/50 flex items-center justify-center flex-shrink-0 mt-1">
+                <span class="text-emerald-400 text-sm">&#129504;</span>
+            </div>
+            <div class="bg-gray-900 rounded-xl rounded-tl-sm p-4 border border-gray-800 max-w-2xl">
+                <p class="text-gray-300 text-sm leading-relaxed">${formatResponse(content)}</p>
+                ${extraHtml}
+            </div>`;
+    }
+    container.appendChild(wrapper);
+    container.scrollTop = container.scrollHeight;
+}
+
+function addThinking() {
+    const container = document.getElementById('chat-messages');
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex gap-3';
+    wrapper.id = 'thinking';
+    wrapper.innerHTML = `
+        <div class="w-8 h-8 rounded-full bg-emerald-900/50 flex items-center justify-center flex-shrink-0 mt-1">
+            <span class="text-emerald-400 text-sm">&#129504;</span>
+        </div>
+        <div class="bg-gray-900 rounded-xl rounded-tl-sm p-4 border border-gray-800">
+            <span class="text-gray-500 text-sm pulse-dot">Thinking...</span>
+        </div>`;
+    container.appendChild(wrapper);
+    container.scrollTop = container.scrollHeight;
+}
+
+function removeThinking() {
+    const el = document.getElementById('thinking');
+    if (el) el.remove();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatResponse(text) {
+    return escapeHtml(text).replace(/\n/g, '<br>');
+}
+
+async function sendMessage() {
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    input.value = '';
+    addMessage('user', msg);
+    addThinking();
+
+    const btn = document.getElementById('send-btn');
+    btn.disabled = true;
+
+    try {
+        // Decide endpoint: if it looks like a question about associations, use /ask
+        const isQuestion = /\b(what|how|which|do you|can you|tell me|describe|remember|associate|hear|see)\b/i.test(msg);
+        const endpoint = isQuestion ? '/api/brain/ask' : '/api/brain/chat';
+        const body = isQuestion
+            ? { question: msg, session_id: SESSION_ID }
+            : { message: msg, session_id: SESSION_ID, associations: lastAssociations };
+
+        const resp = await fetch(endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+        });
+
+        const data = await resp.json();
+        removeThinking();
+
+        if (data.response) {
+            addMessage('brain', data.response, data.context);
+        } else if (data.detail) {
+            addMessage('brain', '[Error: ' + data.detail + ']');
+        }
+    } catch (err) {
+        removeThinking();
+        addMessage('brain', '[Connection error: ' + err.message + ']');
+    } finally {
+        btn.disabled = false;
+        input.focus();
+    }
+}
+
+function quickAsk(question) {
+    document.getElementById('chat-input').value = question;
+    sendMessage();
+}
+
+function toggleYoutube() {
+    const el = document.getElementById('youtube-input');
+    el.classList.toggle('hidden');
+    if (!el.classList.contains('hidden')) {
+        document.getElementById('yt-url').focus();
+    }
+}
+
+async function processAndDescribe() {
+    const url = document.getElementById('yt-url').value.trim();
+    if (!url) return;
+
+    const btn = document.getElementById('yt-btn');
+    btn.disabled = true;
+    btn.textContent = 'Processing...';
+
+    addMessage('user', '🎬 ' + url);
+    addThinking();
+
+    try {
+        // Step 1: Process the video
+        const procResp = await fetch('/api/youtube/process', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({url: url, top_k: 10}),
+        });
+        const procData = await procResp.json();
+
+        if (!procData.associations) {
+            removeThinking();
+            addMessage('brain', '[Could not process video: ' + (procData.detail || 'unknown error') + ']');
+            return;
+        }
+
+        lastAssociations = procData.associations;
+
+        // Step 2: Ask the brain to describe what it perceives
+        const descResp = await fetch('/api/brain/describe', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                associations: procData.associations,
+                video_title: procData.video_info?.title || url,
+                session_id: SESSION_ID,
+            }),
+        });
+        const descData = await descResp.json();
+        removeThinking();
+
+        if (descData.response) {
+            const timing = procData.total_time ? ` (processed in ${procData.total_time})` : '';
+            addMessage('brain', descData.response, descData.context + timing);
+        }
+    } catch (err) {
+        removeThinking();
+        addMessage('brain', '[Error: ' + err.message + ']');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Show Brain';
+        document.getElementById('yt-url').value = '';
+        document.getElementById('youtube-input').classList.add('hidden');
+    }
+}
+
+async function clearChat() {
+    try {
+        await fetch('/api/brain/chat/' + SESSION_ID, { method: 'DELETE' });
+    } catch(e) {}
+    const container = document.getElementById('chat-messages');
+    // Keep only the welcome message (first child)
+    while (container.children.length > 1) {
+        container.removeChild(container.lastChild);
+    }
+    lastAssociations = null;
+}
+</script>
+{% endblock %}

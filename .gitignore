@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Data and outputs (large files)
+data/
+outputs/
+
+# Model weights
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.bin
+!rust/.cargo/config.toml
+
+# Rust build artifacts
+rust/target/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+
+# TLS certificates (dev-only, regenerate with scripts)
+certs/
+
+# Internal tooling
+.claude/
+tasks/
+sweep_queue.json
+
+# Documentation (legacy, will be rewritten — keep API.md)
+docs/*
+!docs/API.md

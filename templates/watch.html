@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+
+{% block title %}Watch — Brain{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-6">
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-white">Real-Time Watching</h1>
+    <span id="status" class="text-sm text-gray-400">Ready</span>
+  </div>
+
+  <div class="bg-gray-800 rounded-lg p-6 space-y-4">
+    <div class="flex items-center gap-4">
+      <button id="btn-watch" onclick="toggleWatching()"
+        class="px-6 py-3 rounded-lg font-semibold text-lg transition-all bg-indigo-600 hover:bg-indigo-500 text-white">
+        Start Watching
+      </button>
+      <label class="text-sm text-gray-400">
+        Capture every
+        <select id="capture-interval" class="bg-gray-700 text-white rounded px-2 py-1 ml-1">
+          <option value="3">3s</option>
+          <option value="5" selected>5s</option>
+          <option value="10">10s</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- Camera preview -->
+    <div id="preview-container" class="hidden">
+      <video id="camera" autoplay playsinline muted class="w-full max-w-md rounded-lg mx-auto"></video>
+      <canvas id="capture-canvas" class="hidden"></canvas>
+    </div>
+  </div>
+
+  <!-- Text query box -->
+  <div class="bg-gray-800 rounded-lg p-6">
+    <h2 class="text-lg font-semibold text-white mb-3">Ask the Brain (text → cross-modal)</h2>
+    <div class="flex gap-2">
+      <input id="text-query" type="text" placeholder="What does rain look like? What sounds do dogs make?"
+        class="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        onkeydown="if(event.key==='Enter') textQuery()">
+      <button onclick="textQuery()"
+        class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold">Ask</button>
+    </div>
+    <div id="text-result" class="mt-3 hidden"></div>
+  </div>
+
+  <!-- Imagine -->
+  <div class="bg-gray-800 rounded-lg p-6">
+    <h2 class="text-lg font-semibold text-white mb-3">Imagine (perception → prediction → causation → association)</h2>
+    <div class="flex gap-2">
+      <input id="imagine-query" type="text" placeholder="thunder, dog swimming, campfire..."
+        class="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
+        onkeydown="if(event.key==='Enter') imagineQuery()">
+      <button onclick="imagineQuery()"
+        class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg font-semibold">Imagine</button>
+    </div>
+    <div id="imagine-result" class="mt-3 hidden"></div>
+  </div>
+
+  <!-- Concept Arithmetic -->
+  <div class="bg-gray-800 rounded-lg p-6">
+    <h2 class="text-lg font-semibold text-white mb-3">Concept Arithmetic</h2>
+    <div class="flex gap-2 items-center">
+      <input id="compose-add" type="text" placeholder="dog, rain"
+        class="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500">
+      <span class="text-gray-400">-</span>
+      <input id="compose-sub" type="text" placeholder="(optional)"
+        class="w-40 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500">
+      <button onclick="composeQuery()"
+        class="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded-lg font-semibold">=</button>
+    </div>
+    <div id="compose-result" class="mt-3 hidden"></div>
+  </div>
+
+  <!-- Results history -->
+  <div id="history" class="space-y-3"></div>
+</div>
+
+<script>
+let watching = false;
+let mediaStream = null;
+let captureTimer = null;
+
+async function toggleWatching() {
+  if (watching) { stopWatching(); } else { await startWatching(); }
+}
+
+async function startWatching() {
+  document.getElementById('status').textContent = 'Requesting camera...';
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 320, height: 240, facingMode: 'environment' }
+    });
+  } catch (e) {
+    document.getElementById('status').textContent = 'Camera denied: ' + e.message;
+    return;
+  }
+  const video = document.getElementById('camera');
+  video.srcObject = mediaStream;
+  document.getElementById('preview-container').classList.remove('hidden');
+
+  watching = true;
+  document.getElementById('btn-watch').textContent = 'Stop Watching';
+  document.getElementById('btn-watch').classList.replace('bg-indigo-600', 'bg-red-600');
+  document.getElementById('status').textContent = 'Watching...';
+  document.getElementById('status').className = 'text-sm text-green-400';
+
+  const interval = parseInt(document.getElementById('capture-interval').value) * 1000;
+  captureTimer = setInterval(captureFrame, interval);
+}
+
+function stopWatching() {
+  watching = false;
+  if (captureTimer) clearInterval(captureTimer);
+  if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+  document.getElementById('preview-container').classList.add('hidden');
+  document.getElementById('btn-watch').textContent = 'Start Watching';
+  document.getElementById('btn-watch').classList.replace('bg-red-600', 'bg-indigo-600');
+  document.getElementById('status').textContent = 'Stopped';
+  document.getElementById('status').className = 'text-sm text-gray-400';
+}
+
+async function captureFrame() {
+  const video = document.getElementById('camera');
+  const canvas = document.getElementById('capture-canvas');
+  canvas.width = 224; canvas.height = 224;
+  const ctx = canvas.getContext('2d');
+  // Center crop
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const size = Math.min(vw, vh);
+  const sx = (vw - size) / 2, sy = (vh - size) / 2;
+  ctx.drawImage(video, sx, sy, size, size, 0, 0, 224, 224);
+
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  const b64 = dataUrl.split(',')[1];
+
+  document.getElementById('status').textContent = 'Processing...';
+  document.getElementById('status').className = 'text-sm text-yellow-400';
+
+  try {
+    const resp = await fetch('/api/brain/watch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({image_b64: b64, top_k: 10}),
+    });
+    const data = await resp.json();
+    addWatchResult(data);
+  } catch (e) {
+    addWatchResult({error: e.message});
+  }
+  if (watching) {
+    document.getElementById('status').textContent = 'Watching...';
+    document.getElementById('status').className = 'text-sm text-green-400';
+  }
+}
+
+function addWatchResult(data) {
+  const history = document.getElementById('history');
+  const card = document.createElement('div');
+  card.className = 'bg-gray-800 rounded-lg p-4 animate-fade-in';
+  const time = new Date().toLocaleTimeString();
+
+  if (data.error) {
+    card.innerHTML = `<div class="text-red-400 text-sm">${time} — error: ${data.error}</div>`;
+  } else {
+    const s = data.summary || {};
+    const seeLabels = (s.i_see || []).join(', ') || 'nothing distinct';
+    const hearLabels = (s.which_sounds_like || []).join(', ');
+
+    const expectLabels = (s.i_expect_to_hear || []).join(', ');
+    const clipScene = (s.clip_scene || []).join(', ');
+
+    let html = `<div class="text-sm text-gray-400 mb-2">${time} — ${s.process_time || '?'}s</div>`;
+    if (clipScene) {
+      html += `<div><span class="text-cyan-400 font-semibold">Scene:</span> <span class="text-white">${clipScene}</span></div>`;
+    }
+    html += `<div><span class="text-emerald-400 font-semibold">I see:</span> <span class="text-white">${seeLabels}</span></div>`;
+    if (expectLabels) {
+      html += `<div><span class="text-amber-400 font-semibold">I expect to hear:</span> <span class="text-white">${expectLabels}</span></div>`;
+    }
+    if (hearLabels) {
+      html += `<div><span class="text-purple-400 font-semibold">Which sounds like:</span> <span class="text-white">${hearLabels}</span></div>`;
+    }
+    if (s.narration) {
+      html += `<div class="mt-2 p-3 bg-gray-900 rounded border border-gray-700 italic text-gray-200">"${s.narration}"</div>`;
+    }
+    card.innerHTML = html;
+  }
+  history.insertBefore(card, history.firstChild);
+  while (history.children.length > 20) history.removeChild(history.lastChild);
+}
+
+async function imagineQuery() {
+  const query = document.getElementById('imagine-query').value.trim();
+  if (!query) return;
+  const resultDiv = document.getElementById('imagine-result');
+  resultDiv.classList.remove('hidden');
+  resultDiv.innerHTML = '<div class="text-yellow-400">Imagining...</div>';
+  try {
+    const resp = await fetch('/api/brain/imagine', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query, depth: 3}),
+    });
+    const data = await resp.json();
+    let html = '';
+    if (data.narrative) {
+      html += `<div class="p-3 bg-gray-900 rounded border border-amber-700/50 text-gray-200 mb-3">${data.narrative}</div>`;
+    }
+    if (data.steps) {
+      html += '<div class="flex flex-wrap gap-2">';
+      for (const s of data.steps) {
+        const labels = s.labels || s.chain || [];
+        if (labels.length > 0) {
+          const colors = {perceive:'indigo', predict:'amber', cause:'red', associate:'purple', compose:'teal'};
+          const c = colors[s.step] || 'gray';
+          html += `<div class="px-3 py-1 bg-${c}-900/30 border border-${c}-700/50 rounded text-xs">
+            <span class="text-${c}-400 font-semibold">${s.step}:</span>
+            <span class="text-gray-300">${labels.join(s.step === 'cause' ? ' → ' : ', ')}</span></div>`;
+        }
+      }
+      html += '</div>';
+    }
+    if (data.confidence !== null && data.confidence !== undefined) {
+      html += `<div class="text-xs text-gray-500 mt-2">Confidence: ${(data.confidence * 100).toFixed(1)}% | ${data.process_time}s</div>`;
+    }
+    resultDiv.innerHTML = html;
+  } catch (e) {
+    resultDiv.innerHTML = `<div class="text-red-400">Error: ${e.message}</div>`;
+  }
+}
+
+async function composeQuery() {
+  const add = document.getElementById('compose-add').value.trim().split(',').map(s => s.trim()).filter(Boolean);
+  const sub = document.getElementById('compose-sub').value.trim().split(',').map(s => s.trim()).filter(Boolean);
+  if (add.length === 0) return;
+  const resultDiv = document.getElementById('compose-result');
+  resultDiv.classList.remove('hidden');
+  resultDiv.innerHTML = '<div class="text-yellow-400">Computing...</div>';
+  try {
+    const resp = await fetch('/api/brain/compose', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({add, subtract: sub, top_k: 8}),
+    });
+    const data = await resp.json();
+    let html = '';
+    if (data.interpretation) {
+      html += `<div class="text-teal-400 font-semibold mb-2">${data.interpretation}</div>`;
+    }
+    if (data.results) {
+      html += '<div class="flex flex-wrap gap-1">';
+      for (const r of data.results) {
+        html += `<span class="px-2 py-0.5 bg-teal-900/30 border border-teal-700/50 rounded text-xs text-gray-300">${r.concept} (${(r.similarity*100).toFixed(0)}%)</span>`;
+      }
+      html += '</div>';
+    }
+    resultDiv.innerHTML = html;
+  } catch (e) {
+    resultDiv.innerHTML = `<div class="text-red-400">Error: ${e.message}</div>`;
+  }
+}
+
+async function textQuery() {
+  const input = document.getElementById('text-query');
+  const query = input.value.trim();
+  if (!query) return;
+
+  const resultDiv = document.getElementById('text-result');
+  resultDiv.classList.remove('hidden');
+  resultDiv.innerHTML = '<div class="text-yellow-400">Thinking...</div>';
+
+  try {
+    const resp = await fetch('/api/brain/text_query', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: query, top_k: 8}),
+    });
+    const data = await resp.json();
+
+    let html = '';
+    if (data.narration) {
+      html += `<div class="p-3 bg-gray-900 rounded border border-gray-700 italic text-gray-200 mb-3">"${data.narration}"</div>`;
+    }
+
+    const semantic = data.results?.semantic_matches || [];
+    if (semantic.length > 0) {
+      html += `<div class="mb-2"><span class="text-indigo-400 font-semibold">Memory matches:</span>
+        <span class="text-white">${semantic.slice(0,5).map(m => m.label + ' (' + (m.text_similarity*100).toFixed(0) + '%)').join(', ')}</span></div>`;
+    }
+
+    const t2a = data.results?.text_to_audio || [];
+    if (t2a.length > 0) {
+      html += `<div><span class="text-purple-400 font-semibold">Cross-modal audio:</span>
+        <span class="text-white">${t2a.slice(0,5).map(m => m.label).join(', ')}</span></div>`;
+    }
+
+    html += `<div class="text-xs text-gray-500 mt-2">${data.process_time}s</div>`;
+    resultDiv.innerHTML = html;
+  } catch (e) {
+    resultDiv.innerHTML = `<div class="text-red-400">Error: ${e.message}</div>`;
+  }
+}
+</script>
+
+<style>
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fade-in 0.3s ease-out; }
+</style>
+{% endblock %}

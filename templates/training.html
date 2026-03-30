@@ -1,0 +1,367 @@
+{% extends "base.html" %}
+{% block title %}Training{% endblock %}
+
+{% block content %}
+<div class="p-6 space-y-6 max-w-7xl mx-auto">
+    <div>
+        <h2 class="text-2xl font-bold">Training</h2>
+        <p class="text-gray-400 text-sm mt-1">Experiments, code evolution, and performance metrics</p>
+    </div>
+
+    <!-- Tab navigation -->
+    <div class="flex gap-1 border-b border-gray-800">
+        <button onclick="showTab('experiments')" id="tab-experiments" class="tab-btn active">Experiments</button>
+        <button onclick="showTab('evolution')" id="tab-evolution" class="tab-btn">Evolution</button>
+        <button onclick="showTab('performance')" id="tab-performance" class="tab-btn">Performance</button>
+    </div>
+
+    <!-- ==================== SECTION: EXPERIMENTS ==================== -->
+    <div id="panel-experiments" class="tab-panel">
+        <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm" id="experiments-table">
+                    <thead>
+                        <tr class="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
+                            <th class="px-4 py-3 text-left cursor-pointer hover:text-gray-300" onclick="sortTable(0, 'num')">ID</th>
+                            <th class="px-4 py-3 text-left cursor-pointer hover:text-gray-300" onclick="sortTable(1, 'str')">Status</th>
+                            <th class="px-4 py-3 text-left cursor-pointer hover:text-gray-300" onclick="sortTable(2, 'num')">MRR</th>
+                            <th class="px-4 py-3 text-left cursor-pointer hover:text-gray-300" onclick="sortTable(3, 'num')">R@1</th>
+                            <th class="px-4 py-3 text-left cursor-pointer hover:text-gray-300" onclick="sortTable(4, 'num')">R@5</th>
+                            <th class="px-4 py-3 text-left cursor-pointer hover:text-gray-300" onclick="sortTable(5, 'num')">Rank</th>
+                            <th class="px-4 py-3 text-left">Hypothesis</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-800">
+                        {% for exp in experiments %}
+                        <tr class="hover:bg-gray-800/50 transition-colors">
+                            <td class="px-4 py-3 mono text-gray-400" data-val="{{ exp.id }}">#{{ exp.id }}</td>
+                            <td class="px-4 py-3" data-val="{{ exp.status }}">
+                                {% if exp.status == 'completed' %}
+                                <span class="px-2 py-0.5 rounded-full text-xs bg-emerald-900/50 text-emerald-400">completed</span>
+                                {% elif exp.status == 'running' %}
+                                <span class="px-2 py-0.5 rounded-full text-xs bg-blue-900/50 text-blue-400">running</span>
+                                {% elif exp.status == 'failed' %}
+                                <span class="px-2 py-0.5 rounded-full text-xs bg-red-900/50 text-red-400">failed</span>
+                                {% else %}
+                                <span class="px-2 py-0.5 rounded-full text-xs bg-gray-800 text-gray-400">{{ exp.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 mono text-xs" data-val="{{ exp.v2a_mrr | default(value=0) }}">{{ exp.v2a_mrr | default(value="") | round4 }}</td>
+                            <td class="px-4 py-3 mono text-xs" data-val="{{ exp.v2a_r1 | default(value=0) }}">{{ exp.v2a_r1 | default(value="") | round4 }}</td>
+                            <td class="px-4 py-3 mono text-xs" data-val="{{ exp.v2a_r5 | default(value=0) }}">{{ exp.v2a_r5 | default(value="") | round4 }}</td>
+                            <td class="px-4 py-3 mono text-xs" data-val="{{ exp.estimated_rank | default(value=0) }}">{{ exp.estimated_rank | default(value="") | round2 }}</td>
+                            <td class="px-4 py-3 text-gray-500 text-xs truncate max-w-sm">{{ exp.hypothesis_short }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== SECTION: EVOLUTION ==================== -->
+    <div id="panel-evolution" class="tab-panel hidden">
+        <!-- Stats cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+                <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Total Mutations</div>
+                <div class="text-3xl font-bold text-purple-400">{{ mutation_stats.total | default(value=0) }}</div>
+            </div>
+            <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+                <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Accepted</div>
+                <div class="text-3xl font-bold text-emerald-400">{{ mutation_stats.accepted | default(value=0) }}</div>
+                <div class="text-xs text-gray-500 mt-1">{{ mutation_stats.acceptance_rate | default(value=0) | pct }} rate</div>
+            </div>
+            <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+                <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Cumulative Improvement</div>
+                <div class="text-3xl font-bold text-amber-400">
+                    {% if trajectory %}+{{ last_cumulative_delta | default(value=0) | round4 }}{% else %}--{% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- By target breakdown -->
+        {% if mutation_stats.by_target %}
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800 mb-8">
+            <h3 class="text-sm font-semibold text-gray-400 mb-4">Mutations by Target</h3>
+            <div class="space-y-3">
+                {% for t in mutation_stats.by_target %}
+                <div class="flex items-center gap-4">
+                    <div class="w-56 text-sm mono text-gray-300">{{ t.target_name }}</div>
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2">
+                            <div class="w-full bg-gray-800 rounded-full h-3">
+                                {% set total = t.cnt %}
+                                {% set acc = t.accepted_cnt %}
+                                {% if total > 0 %}
+                                    {% set pct_val = acc / total * 100 %}
+                                {% else %}
+                                    {% set pct_val = 0 %}
+                                {% endif %}
+                                <div class="bg-emerald-600 h-3 rounded-full" style="width: {{ pct_val }}%"></div>
+                            </div>
+                            <span class="text-xs text-gray-500 w-24">{{ acc }}/{{ total }}</span>
+                        </div>
+                    </div>
+                    <div class="text-sm mono {% if t.avg_delta and t.avg_delta > 0 %}text-emerald-400{% elif t.avg_delta and t.avg_delta < 0 %}text-red-400{% else %}text-gray-500{% endif %}">
+                        {{ t.avg_delta | default(value=0) | round4 }}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Evolution trajectory chart -->
+        {% if trajectory %}
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800 mb-8">
+            <h3 class="text-sm font-semibold text-gray-400 mb-4">Evolution Trajectory</h3>
+            <canvas id="trajectory-chart" height="150"></canvas>
+        </div>
+        {% endif %}
+
+        <!-- Recent mutations -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+            <div class="px-5 py-4 border-b border-gray-800">
+                <h3 class="text-sm font-semibold text-gray-400">Recent Mutations</h3>
+            </div>
+            {% if recent_mutations %}
+            <div class="divide-y divide-gray-800">
+                {% for m in recent_mutations %}
+                <details class="group">
+                    <summary class="px-5 py-3 cursor-pointer hover:bg-gray-800/50 transition-colors flex items-center gap-3">
+                        {% if m.accepted %}
+                        <span class="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></span>
+                        {% else %}
+                        <span class="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"></span>
+                        {% endif %}
+                        <span class="mono text-sm text-gray-300 flex-shrink-0">{{ m.target_name }}</span>
+                        <span class="text-sm mono {% if m.score_delta and m.score_delta > 0 %}text-emerald-400{% elif m.score_delta and m.score_delta < 0 %}text-red-400{% else %}text-gray-500{% endif %}">
+                            {{ m.score_delta | default(value=0) | round4 }}
+                        </span>
+                        <span class="text-xs text-gray-600 ml-auto">#{{ m.id }}</span>
+                    </summary>
+                    <div class="px-5 py-4 bg-gray-950 border-t border-gray-800">
+                        {% if m.diff %}
+                        <h4 class="text-xs text-gray-500 uppercase tracking-wider mb-2">Diff</h4>
+                        <pre class="text-xs overflow-x-auto p-3 bg-gray-900 rounded-lg mb-4 max-h-96 overflow-y-auto whitespace-pre-wrap text-gray-400">{{ m.diff }}</pre>
+                        {% endif %}
+                    </div>
+                </details>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-8 text-center text-gray-600">
+                No mutations yet. Code evolution begins after the HPO warmup phase.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ==================== SECTION: PERFORMANCE ==================== -->
+    <div id="panel-performance" class="tab-panel hidden">
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <!-- MRR over experiments -->
+            <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+                <h3 class="text-sm font-semibold text-gray-400 mb-4">MRR by Experiment</h3>
+                <div style="position:relative; height:320px;">
+                    <canvas id="mrr-chart"></canvas>
+                </div>
+            </div>
+            <!-- Best MRR progression -->
+            <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+                <h3 class="text-sm font-semibold text-gray-400 mb-4">Best MRR Progression</h3>
+                <div style="position:relative; height:320px;">
+                    <canvas id="best-mrr-chart"></canvas>
+                </div>
+            </div>
+        </div>
+        <!-- R@1 / R@5 comparison -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-5 mt-6">
+            <h3 class="text-sm font-semibold text-gray-400 mb-4">R@1 vs R@5 by Experiment</h3>
+            <div style="position:relative; height:280px;">
+                <canvas id="recall-chart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ═══════════════════════════ TABS ═══════════════════════════
+function showTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('panel-'+name).classList.remove('hidden');
+    document.getElementById('tab-'+name).classList.add('active');
+    if (name === 'performance') renderPerformanceCharts();
+}
+
+// ═══════════════════════════ SORTABLE TABLE ═══════════════════════════
+let sortCol = -1, sortAsc = true;
+function sortTable(colIdx, type) {
+    const table = document.getElementById('experiments-table');
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+
+    if (sortCol === colIdx) {
+        sortAsc = !sortAsc;
+    } else {
+        sortCol = colIdx;
+        sortAsc = true;
+    }
+
+    rows.sort((a, b) => {
+        const av = a.children[colIdx].dataset.val || a.children[colIdx].textContent.trim();
+        const bv = b.children[colIdx].dataset.val || b.children[colIdx].textContent.trim();
+        let cmp;
+        if (type === 'num') {
+            cmp = (parseFloat(av) || 0) - (parseFloat(bv) || 0);
+        } else {
+            cmp = av.localeCompare(bv);
+        }
+        return sortAsc ? cmp : -cmp;
+    });
+
+    rows.forEach(r => tbody.appendChild(r));
+}
+
+// ═══════════════════════════ PERFORMANCE CHARTS ═══════════════════════════
+let chartsRendered = false;
+function renderPerformanceCharts() {
+    if (chartsRendered) return;
+    chartsRendered = true;
+
+    const experiments = [];
+    const table = document.getElementById('experiments-table');
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(row => {
+        const cells = row.children;
+        experiments.push({
+            id: parseInt(cells[0].dataset.val) || 0,
+            mrr: parseFloat(cells[2].dataset.val) || 0,
+            r1: parseFloat(cells[3].dataset.val) || 0,
+            r5: parseFloat(cells[4].dataset.val) || 0,
+        });
+    });
+
+    // Sort by ID for chart ordering
+    experiments.sort((a, b) => a.id - b.id);
+
+    const chartOpts = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#9ca3af', font: { size: 11 } } } },
+        scales: {
+            x: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f2937' } },
+            y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f2937' } },
+        },
+    };
+
+    // MRR bar chart
+    const mrrCtx = document.getElementById('mrr-chart');
+    if (mrrCtx) {
+        new Chart(mrrCtx, {
+            type: 'bar',
+            data: {
+                labels: experiments.map(e => '#' + e.id),
+                datasets: [{
+                    label: 'MRR',
+                    data: experiments.map(e => e.mrr),
+                    backgroundColor: experiments.map(e => e.mrr > 0 ? '#34d39980' : '#4b556380'),
+                    borderColor: experiments.map(e => e.mrr > 0 ? '#34d399' : '#4b5563'),
+                    borderWidth: 1,
+                }],
+            },
+            options: chartOpts,
+        });
+    }
+
+    // Best MRR progression
+    const bestCtx = document.getElementById('best-mrr-chart');
+    if (bestCtx) {
+        let best = 0;
+        const bestData = experiments.map(e => {
+            if (e.mrr > best) best = e.mrr;
+            return best;
+        });
+        new Chart(bestCtx, {
+            type: 'line',
+            data: {
+                labels: experiments.map(e => '#' + e.id),
+                datasets: [{
+                    label: 'Best MRR',
+                    data: bestData,
+                    borderColor: '#22c55e',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 2,
+                }],
+            },
+            options: chartOpts,
+        });
+    }
+
+    // R@1 vs R@5
+    const recallCtx = document.getElementById('recall-chart');
+    if (recallCtx) {
+        new Chart(recallCtx, {
+            type: 'line',
+            data: {
+                labels: experiments.map(e => '#' + e.id),
+                datasets: [
+                    {
+                        label: 'R@1',
+                        data: experiments.map(e => e.r1),
+                        borderColor: '#3b82f6',
+                        backgroundColor: '#3b82f620',
+                        tension: 0.3,
+                        pointRadius: 2,
+                    },
+                    {
+                        label: 'R@5',
+                        data: experiments.map(e => e.r5),
+                        borderColor: '#a855f7',
+                        backgroundColor: '#a855f720',
+                        tension: 0.3,
+                        pointRadius: 2,
+                    },
+                ],
+            },
+            options: chartOpts,
+        });
+    }
+}
+
+// ═══════════════════════════ EVOLUTION TRAJECTORY ═══════════════════════════
+{% if trajectory %}
+(function() {
+    const traj = {{ trajectory | json_encode() | safe }};
+    new Chart(document.getElementById('trajectory-chart'), {
+        type: 'line',
+        data: {
+            labels: traj.map(t => '#' + t.mutation_id),
+            datasets: [{
+                label: 'Cumulative Delta',
+                data: traj.map(t => t.cumulative_delta),
+                borderColor: '#a855f7',
+                backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                fill: true,
+                tension: 0.3,
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { labels: { color: '#9ca3af' } } },
+            scales: {
+                x: { ticks: { color: '#6b7280' }, grid: { color: '#1f2937' } },
+                y: { ticks: { color: '#6b7280' }, grid: { color: '#1f2937' } },
+            },
+        },
+    });
+})();
+{% endif %}
+</script>
+{% endblock %}

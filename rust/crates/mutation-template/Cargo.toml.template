@@ -1,0 +1,11 @@
+[package]
+name = "mutation-{{MUTATION_ID}}"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+brain-traits = { path = "{{BRAIN_TRAITS_PATH}}" }
+ndarray = "0.16"

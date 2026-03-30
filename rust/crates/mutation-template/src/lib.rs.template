@@ -1,0 +1,18 @@
+//! Auto-generated mutation {{MUTATION_ID}}
+//! Target: {{TARGET_NAME}}
+//! Generated at: {{TIMESTAMP}}
+
+use brain_traits::*;
+
+{{MUTATION_CODE}}
+
+/// The vtable that the experiment runner loads.
+#[unsafe(no_mangle)]
+pub static brain_mutation_vtable: MutationVtable = MutationVtable {
+    version: ABI_VERSION,
+    kind: MutationKind::{{MUTATION_KIND}},
+    hebbian_update: {{HEBBIAN_UPDATE}},
+    hebbian_prune: {{HEBBIAN_PRUNE}},
+    sparse_forward: {{SPARSE_FORWARD}},
+    temporal_update: {{TEMPORAL_UPDATE}},
+};

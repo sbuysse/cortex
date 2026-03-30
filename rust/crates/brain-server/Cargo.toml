@@ -1,0 +1,31 @@
+[package]
+name = "brain-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brain-core = { path = "../brain-core" }
+brain-db = { path = "../brain-db" }
+brain-experiment = { path = "../brain-experiment" }
+brain-cognition = { path = "../brain-cognition" }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tera = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sysinfo = { workspace = true }
+async-stream = { workspace = true }
+thiserror = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+ndarray = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+futures-util = "0.3"
+image = { workspace = true }
+base64 = { workspace = true }
+brain-inference = { path = "../brain-inference" }
+urlencoding = "2"

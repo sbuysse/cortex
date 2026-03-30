@@ -1,0 +1,51 @@
+[package]
+name = "brain-experiment"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brain-core = { path = "../brain-core" }
+brain-traits = { path = "../brain-traits" }
+brain-db = { path = "../brain-db" }
+ndarray = { workspace = true }
+blas-src = { workspace = true }
+openblas-src = { workspace = true }
+safetensors = { workspace = true }
+libloading = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+tracing-subscriber = { workspace = true }
+rusqlite = { workspace = true }
+
+[[bin]]
+name = "train-and-save"
+path = "src/bin/train_and_save.rs"
+
+[[bin]]
+name = "train-v2"
+path = "src/bin/train_v2.rs"
+
+[[bin]]
+name = "db-fix"
+path = "src/bin/db_fix.rs"
+
+[[bin]]
+name = "eval-v2"
+path = "src/bin/eval_v2.rs"
+
+[[bin]]
+name = "train-v4"
+path = "src/bin/train_v4.rs"
+
+[[bin]]
+name = "train-v5"
+path = "src/bin/train_v5.rs"
+
+[[bin]]
+name = "train-v3"
+path = "src/bin/train_v3.rs"

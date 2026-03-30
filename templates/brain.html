@@ -1,0 +1,681 @@
+{% extends "base.html" %}
+{% block title %}Visual Brain{% endblock %}
+
+{% block content %}
+<div class="p-6 space-y-6 max-w-[1800px] mx-auto">
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-bold">Visual Brain</h2>
+            <p class="text-gray-400 text-sm mt-1">Explore what the neural network has learned</p>
+        </div>
+        <div id="loadingIndicator" class="flex items-center gap-2 text-sm text-gray-500">
+            <div class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot"></div>
+            Loading brain data...
+        </div>
+    </div>
+
+    <!-- Tab navigation -->
+    <div class="flex gap-1 bg-gray-900 rounded-lg p-1 w-fit">
+        <button onclick="showTab('map')" id="tab-map" class="tab-btn px-4 py-2 rounded-md text-sm font-medium transition-colors bg-gray-800 text-white">
+            Embedding Map
+        </button>
+        <button onclick="showTab('matrices')" id="tab-matrices" class="tab-btn px-4 py-2 rounded-md text-sm font-medium transition-colors text-gray-400 hover:text-white">
+            Association Matrices
+        </button>
+        <button onclick="showTab('explorer')" id="tab-explorer" class="tab-btn px-4 py-2 rounded-md text-sm font-medium transition-colors text-gray-400 hover:text-white">
+            Clip Explorer
+        </button>
+        <button onclick="showTab('network')" id="tab-network" class="tab-btn px-4 py-2 rounded-md text-sm font-medium transition-colors text-gray-400 hover:text-white">
+            Network Graph
+        </button>
+    </div>
+
+    <!-- ==================== TAB: EMBEDDING MAP ==================== -->
+    <div id="panel-map" class="tab-panel">
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <!-- Vision embedding space -->
+            <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-semibold">Vision Embedding Space</h3>
+                    <span class="text-xs text-gray-500" id="vizClipCount"></span>
+                </div>
+                <div class="relative" style="height:480px;">
+                    <canvas id="pcaVisionCanvas" class="w-full h-full cursor-crosshair"></canvas>
+                </div>
+            </div>
+            <!-- Audio embedding space -->
+            <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-semibold">Audio Embedding Space</h3>
+                    <span class="text-xs text-gray-500">Click a dot to explore</span>
+                </div>
+                <div class="relative" style="height:480px;">
+                    <canvas id="pcaAudioCanvas" class="w-full h-full cursor-crosshair"></canvas>
+                </div>
+            </div>
+        </div>
+        <!-- Legend -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+            <div class="flex items-center gap-2 mb-2">
+                <h3 class="text-sm font-semibold">Categories</h3>
+                <span class="text-xs text-gray-500">(top 30 by frequency)</span>
+            </div>
+            <div id="pcaLegend" class="flex flex-wrap gap-2"></div>
+        </div>
+        <!-- Similarity distribution -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+            <h3 class="text-sm font-semibold mb-3">Cross-Modal Similarity Distribution</h3>
+            <p class="text-xs text-gray-500 mb-2">How aligned is each clip's vision and audio embedding? Higher = more coherent.</p>
+            <div style="position:relative; height:140px;">
+                <canvas id="simDistChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TAB: ASSOCIATION MATRICES ==================== -->
+    <div id="panel-matrices" class="tab-panel hidden">
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6" id="heatmapGrid"></div>
+        <!-- Weight distributions -->
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-4 mt-6">
+            <h3 class="text-sm font-semibold mb-3">Weight Distributions</h3>
+            <p class="text-xs text-gray-500 mb-3">Histogram of cross-correlation values — sharp peaks at 0 indicate sparse structure.</p>
+            <div style="position:relative; height:220px;">
+                <canvas id="weightDistChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TAB: CLIP EXPLORER ==================== -->
+    <div id="panel-explorer" class="tab-panel hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Search / select -->
+            <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+                <h3 class="text-sm font-semibold mb-3">Find a Clip</h3>
+                <input id="clipSearchInput" type="text" placeholder="Type to search labels..."
+                       class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white mb-3"
+                       oninput="searchClips(this.value)">
+                <div id="clipSearchResults" class="space-y-1 max-h-64 overflow-y-auto"></div>
+                <button onclick="randomClip()" class="mt-3 w-full px-3 py-2 bg-emerald-900/50 hover:bg-emerald-800/50 border border-emerald-700 rounded-lg text-sm transition-colors">
+                    Random Clip
+                </button>
+            </div>
+            <!-- Clip detail -->
+            <div class="lg:col-span-2 space-y-4">
+                <div id="clipDetail" class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                    <div class="text-gray-500 text-center py-12">Select a clip to explore its neural activations</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TAB: NETWORK GRAPH ==================== -->
+    <div id="panel-network" class="tab-panel hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <h3 class="text-lg font-semibold mb-4">5-Modality Association Network</h3>
+                <div class="relative" style="height:520px;">
+                    <canvas id="networkCanvas" class="w-full h-full"></canvas>
+                </div>
+                <div class="mt-3 text-xs text-gray-500">
+                    Line thickness = cross-correlation strength. Click a node to highlight its connections.
+                </div>
+            </div>
+            <div class="space-y-4">
+                <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase mb-3">Connection Strengths</h3>
+                    <div id="connectionList" class="space-y-2"></div>
+                </div>
+                <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+                    <h3 class="text-sm font-semibold text-gray-400 uppercase mb-3">Latest Experiment</h3>
+                    <div id="latestMetrics" class="space-y-2 text-sm"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ═══════════════════════════ GLOBALS ═══════════════════════════
+let BD = null; // brain data
+const PALETTE = [
+    '#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#14b8a6','#06b6d4',
+    '#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899','#f43f5e',
+    '#fb923c','#fbbf24','#a3e635','#34d399','#22d3ee','#60a5fa','#818cf8',
+    '#c084fc','#e879f9','#fb7185','#fdba74','#fde047','#bef264','#6ee7b7',
+    '#67e8f9','#93c5fd'
+];
+const MOD_COLORS = {vision:'#3b82f6',audio:'#a855f7',emotion:'#ef4444',speech:'#22c55e',properties:'#f59e0b'};
+const MOD_LABELS = {vision:'Vision',audio:'Audio',emotion:'Emotion',speech:'Speech',properties:'Props'};
+const PAIRS = [
+    ['vision','audio','M_va'],['vision','emotion','M_ve'],['audio','emotion','M_ae'],
+    ['vision','speech','M_vs'],['audio','speech','M_as'],['emotion','speech','M_es'],
+    ['vision','properties','M_vp'],['audio','properties','M_ap'],['emotion','properties','M_ep'],
+    ['speech','properties','M_sp'],
+];
+
+// ═══════════════════════════ TABS ═══════════════════════════
+function showTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+    document.querySelectorAll('.tab-btn').forEach(b => {
+        b.classList.remove('bg-gray-800','text-white');
+        b.classList.add('text-gray-400');
+    });
+    document.getElementById('panel-'+name).classList.remove('hidden');
+    const btn = document.getElementById('tab-'+name);
+    btn.classList.add('bg-gray-800','text-white');
+    btn.classList.remove('text-gray-400');
+    if (name === 'map' && BD) renderPCA();
+    if (name === 'network' && BD) renderNetwork();
+}
+
+// ═══════════════════════════ DATA LOADING ═══════════════════════════
+async function loadBrainData() {
+    try {
+        const r = await fetch('/api/brain/state');
+        BD = await r.json();
+        if (BD.error) { document.getElementById('loadingIndicator').textContent = BD.error; return; }
+        document.getElementById('loadingIndicator').innerHTML =
+            `<span class="text-emerald-400">${BD.n_clips.toLocaleString()} clips loaded</span>`;
+        renderPCA();
+        renderHeatmaps();
+        renderConnectionList();
+        renderLatestMetrics();
+        renderSimDist();
+    } catch(e) {
+        document.getElementById('loadingIndicator').textContent = 'Failed to load';
+    }
+}
+
+// ═══════════════════════════ PCA SCATTER ═══════════════════════════
+function renderPCA() {
+    if (!BD || !BD.pca_v) return;
+    renderScatter('pcaVisionCanvas', BD.pca_v, BD.pca_category_idx);
+    renderScatter('pcaAudioCanvas', BD.pca_a, BD.pca_category_idx);
+    document.getElementById('vizClipCount').textContent = `${BD.pca_v.length} clips sampled`;
+    renderLegend();
+}
+
+function renderScatter(canvasId, points, catIdx) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const dpr = window.devicePixelRatio;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+
+    ctx.fillStyle = '#030712';
+    ctx.fillRect(0, 0, W, H);
+
+    if (!points.length) return;
+
+    // Compute bounds
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [x, y] of points) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    const pad = 20;
+    const sx = (W - 2*pad) / (maxX - minX || 1);
+    const sy = (H - 2*pad) / (maxY - minY || 1);
+    const scale = Math.min(sx, sy);
+    const ox = pad + (W - 2*pad - (maxX - minX) * scale) / 2;
+    const oy = pad + (H - 2*pad - (maxY - minY) * scale) / 2;
+
+    const toScreen = ([x, y]) => [ox + (x - minX) * scale, oy + (y - minY) * scale];
+
+    // Draw points
+    for (let i = 0; i < points.length; i++) {
+        const [sx2, sy2] = toScreen(points[i]);
+        const ci = catIdx[i];
+        const color = ci < PALETTE.length ? PALETTE[ci] : '#4b5563';
+        ctx.beginPath();
+        ctx.arc(sx2, sy2, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = color + '90';
+        ctx.fill();
+    }
+
+    // Click handler: find nearest point
+    canvas.onclick = (e) => {
+        const cr = canvas.getBoundingClientRect();
+        const mx = e.clientX - cr.left, my = e.clientY - cr.top;
+        let bestDist = Infinity, bestIdx = -1;
+        for (let i = 0; i < points.length; i++) {
+            const [sx2, sy2] = toScreen(points[i]);
+            const dist = Math.hypot(mx - sx2, my - sy2);
+            if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+        }
+        if (bestDist < 15 && bestIdx >= 0) {
+            // Highlight this point
+            const [sx2, sy2] = toScreen(points[bestIdx]);
+            ctx.beginPath();
+            ctx.arc(sx2, sy2, 8, 0, Math.PI * 2);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            // Show clip info
+            showTab('explorer');
+            loadClipDetail(bestIdx);
+        }
+    };
+}
+
+function renderLegend() {
+    const el = document.getElementById('pcaLegend');
+    if (!BD.category_colors) return;
+    const entries = Object.entries(BD.category_colors).sort((a, b) => a[1] - b[1]);
+    el.innerHTML = entries.map(([name, idx]) =>
+        `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs" style="background:${PALETTE[idx]}20;color:${PALETTE[idx]}">
+            <span class="w-2 h-2 rounded-full" style="background:${PALETTE[idx]}"></span>
+            ${name}
+        </span>`
+    ).join('') + `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs text-gray-500 bg-gray-800">
+        <span class="w-2 h-2 rounded-full bg-gray-600"></span>other
+    </span>`;
+}
+
+// ═══════════════════════════ SIMILARITY DISTRIBUTION ═══════════════════════════
+let simChart = null;
+function renderSimDist() {
+    if (!BD.sample_sims) return;
+    const sims = BD.sample_sims;
+    // Build histogram
+    const nBins = 40;
+    const min = Math.min(...sims), max = Math.max(...sims);
+    const range = max - min || 1;
+    const bins = new Array(nBins).fill(0);
+    const labels = [];
+    for (let i = 0; i < nBins; i++) labels.push((min + (i + 0.5) * range / nBins).toFixed(3));
+    for (const s of sims) {
+        const b = Math.min(Math.floor((s - min) / range * nBins), nBins - 1);
+        bins[b]++;
+    }
+    const ctx = document.getElementById('simDistChart').getContext('2d');
+    if (simChart) simChart.destroy();
+    simChart = new Chart(ctx, {
+        type: 'bar',
+        data: { labels, datasets: [{ data: bins, backgroundColor: '#6366f180', borderColor: '#6366f1', borderWidth: 1 }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { maxTicksLimit: 10, color: '#6b7280', font: {size: 10} }, grid: { display: false } },
+                y: { ticks: { color: '#6b7280', font: {size: 10} }, grid: { color: '#1f2937' } }
+            }
+        }
+    });
+}
+
+// ═══════════════════════════ HEATMAPS ═══════════════════════════
+function renderHeatmaps() {
+    if (!BD.heatmaps) return;
+    const grid = document.getElementById('heatmapGrid');
+    grid.innerHTML = '';
+
+    for (const [a, b, key] of PAIRS) {
+        const data = BD.heatmaps[key];
+        if (!data) continue;
+        const size = data.length;
+
+        const div = document.createElement('div');
+        div.className = 'bg-gray-900 rounded-xl border border-gray-800 p-4';
+        div.innerHTML = `
+            <div class="flex items-center justify-between mb-2">
+                <div class="text-sm">
+                    <span style="color:${MOD_COLORS[a]}">${MOD_LABELS[a]}</span>
+                    <span class="text-gray-600 mx-1">&harr;</span>
+                    <span style="color:${MOD_COLORS[b]}">${MOD_LABELS[b]}</span>
+                </div>
+                <span class="text-xs text-gray-500 mono">${size}x${size}</span>
+            </div>
+            <canvas id="hm_${key}" class="w-full rounded" style="image-rendering:pixelated;aspect-ratio:1"></canvas>
+            <div class="flex justify-between mt-1 text-xs text-gray-600">
+                <span>-</span><span>0</span><span>+</span>
+            </div>`;
+        grid.appendChild(div);
+
+        // Render after DOM insertion
+        requestAnimationFrame(() => {
+            const canvas = document.getElementById('hm_'+key);
+            if (!canvas) return;
+            canvas.width = size; canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.createImageData(size, size);
+
+            let maxAbs = 0;
+            for (let i = 0; i < size; i++)
+                for (let j = 0; j < size; j++)
+                    maxAbs = Math.max(maxAbs, Math.abs(data[i][j]));
+            maxAbs = maxAbs || 1;
+
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    const v = data[i][j] / maxAbs;
+                    const idx = (i * size + j) * 4;
+                    if (v >= 0) {
+                        imgData.data[idx] = 0;
+                        imgData.data[idx+1] = Math.floor(v * 200);
+                        imgData.data[idx+2] = Math.floor(v * 255);
+                    } else {
+                        imgData.data[idx] = Math.floor(-v * 255);
+                        imgData.data[idx+1] = Math.floor(-v * 60);
+                        imgData.data[idx+2] = 0;
+                    }
+                    imgData.data[idx+3] = 255;
+                }
+            }
+            ctx.putImageData(imgData, 0, 0);
+        });
+    }
+}
+
+// ═══════════════════════════ WEIGHT DISTRIBUTION ═══════════════════════════
+let weightChart = null;
+function renderWeightDist() {
+    if (!BD.histograms) return;
+    const ctx = document.getElementById('weightDistChart').getContext('2d');
+    const [hMin, hMax] = BD.hist_range;
+    const datasets = [];
+    const colors = ['#3b82f6','#a855f7','#ef4444','#22c55e','#f59e0b','#06b6d4','#ec4899','#84cc16','#f97316','#6366f1'];
+    let i = 0;
+    const labels = [];
+    for (const [key, hist] of Object.entries(BD.histograms)) {
+        if (!labels.length) {
+            for (let b = 0; b < hist.length; b++)
+                labels.push((hMin + (b + 0.5) * (hMax - hMin) / hist.length).toFixed(4));
+        }
+        datasets.push({
+            label: key, data: hist,
+            borderColor: colors[i % colors.length],
+            backgroundColor: colors[i % colors.length] + '20',
+            borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false
+        });
+        i++;
+    }
+    if (weightChart) weightChart.destroy();
+    weightChart = new Chart(ctx, {
+        type: 'line', data: { labels, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 8, font: {size: 10}, color: '#9ca3af' } } },
+            scales: {
+                x: { ticks: { maxTicksLimit: 8, color: '#6b7280', font: {size: 10} }, grid: { display: false } },
+                y: { type: 'logarithmic', ticks: { color: '#6b7280', font: {size: 10} }, grid: { color: '#1f2937' } }
+            }
+        }
+    });
+}
+
+// ═══════════════════════════ CLIP EXPLORER ═══════════════════════════
+async function searchClips(query) {
+    const el = document.getElementById('clipSearchResults');
+    if (query.length < 2) { el.innerHTML = ''; return; }
+    try {
+        const r = await fetch('/api/interact/search?q=' + encodeURIComponent(query));
+        const data = await r.json();
+        el.innerHTML = (data.results || []).slice(0, 20).map(item =>
+            `<button onclick="loadClipDetail(${item.idx})"
+                class="w-full text-left px-3 py-1.5 rounded text-xs hover:bg-gray-800 transition-colors truncate">
+                <span class="text-gray-300">#${item.idx}</span>
+                <span class="text-gray-400 ml-1">${item.label}</span>
+            </button>`
+        ).join('');
+    } catch(e) {}
+}
+
+function randomClip() {
+    const idx = Math.floor(Math.random() * (BD?.n_clips || 1000));
+    loadClipDetail(idx);
+}
+
+async function loadClipDetail(idx) {
+    const el = document.getElementById('clipDetail');
+    el.innerHTML = '<div class="text-gray-500 text-center py-4">Loading clip #' + idx + '...</div>';
+    try {
+        const r = await fetch('/api/brain/clip?idx=' + idx);
+        const clip = await r.json();
+        if (clip.error) { el.innerHTML = `<div class="text-red-400">${clip.error}</div>`; return; }
+
+        el.innerHTML = `
+            <div class="flex items-center gap-4 mb-6">
+                <div class="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-2xl font-bold">
+                    ${clip.idx}
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold">${clip.label}</h3>
+                    <p class="text-sm text-gray-400">Cross-modal similarity: <span class="mono text-emerald-400">${clip.cross_sim.toFixed(4)}</span></p>
+                </div>
+            </div>
+
+            <!-- Activation bars -->
+            <div class="grid grid-cols-2 gap-6 mb-6">
+                <div>
+                    <h4 class="text-sm font-semibold text-blue-400 mb-2">Vision Activations (top 20 dims)</h4>
+                    <div class="space-y-0.5">
+                        ${clip.top_v_dims.map(d => `
+                            <div class="flex items-center gap-2 text-xs">
+                                <span class="w-8 text-right text-gray-500 mono">${d.dim}</span>
+                                <div class="flex-1 h-3 bg-gray-800 rounded overflow-hidden">
+                                    <div class="h-full bg-blue-500 rounded" style="width:${(d.val / clip.top_v_dims[0].val * 100).toFixed(0)}%"></div>
+                                </div>
+                                <span class="w-10 text-right text-gray-400 mono">${d.val.toFixed(2)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                <div>
+                    <h4 class="text-sm font-semibold text-purple-400 mb-2">Audio Activations (top 20 dims)</h4>
+                    <div class="space-y-0.5">
+                        ${clip.top_a_dims.map(d => `
+                            <div class="flex items-center gap-2 text-xs">
+                                <span class="w-8 text-right text-gray-500 mono">${d.dim}</span>
+                                <div class="flex-1 h-3 bg-gray-800 rounded overflow-hidden">
+                                    <div class="h-full bg-purple-500 rounded" style="width:${(d.val / clip.top_a_dims[0].val * 100).toFixed(0)}%"></div>
+                                </div>
+                                <span class="w-10 text-right text-gray-400 mono">${d.val.toFixed(2)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Neighbors -->
+            <div class="grid grid-cols-2 gap-6">
+                <div>
+                    <h4 class="text-sm font-semibold text-blue-400 mb-2">Nearest Vision Neighbors</h4>
+                    <div class="space-y-1">
+                        ${clip.v_neighbors.map((n, i) => `
+                            <button onclick="loadClipDetail(${n.idx})"
+                                class="w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded hover:bg-gray-800 transition-colors text-left">
+                                <span class="text-gray-500 w-4">${i+1}.</span>
+                                <span class="flex-1 truncate">${n.label}</span>
+                                <span class="mono text-blue-300">${n.sim.toFixed(3)}</span>
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+                <div>
+                    <h4 class="text-sm font-semibold text-purple-400 mb-2">Nearest Audio Neighbors</h4>
+                    <div class="space-y-1">
+                        ${clip.a_neighbors.map((n, i) => `
+                            <button onclick="loadClipDetail(${n.idx})"
+                                class="w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded hover:bg-gray-800 transition-colors text-left">
+                                <span class="text-gray-500 w-4">${i+1}.</span>
+                                <span class="flex-1 truncate">${n.label}</span>
+                                <span class="mono text-purple-300">${n.sim.toFixed(3)}</span>
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Norms -->
+            <div class="flex gap-4 mt-4 pt-4 border-t border-gray-800 text-xs text-gray-500">
+                <span>Vision L2 norm: <span class="mono text-gray-300">${clip.v_norm.toFixed(3)}</span></span>
+                <span>Audio L2 norm: <span class="mono text-gray-300">${clip.a_norm.toFixed(3)}</span></span>
+            </div>`;
+    } catch(e) {
+        el.innerHTML = '<div class="text-red-400">Failed to load clip</div>';
+    }
+}
+
+// ═══════════════════════════ NETWORK GRAPH ═══════════════════════════
+let selectedNode = null;
+function renderNetwork() {
+    const canvas = document.getElementById('networkCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const dpr = window.devicePixelRatio;
+    canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px';
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+    const cx = W/2, cy = H/2, radius = Math.min(W,H)*0.35;
+
+    ctx.clearRect(0, 0, W, H);
+
+    const mods = ['vision','audio','emotion','speech','properties'];
+    const nodes = {};
+    mods.forEach((m, i) => {
+        const angle = -Math.PI/2 + 2*Math.PI*i/5;
+        nodes[m] = { x: cx + radius*Math.cos(angle), y: cy + radius*Math.sin(angle) };
+    });
+
+    // Compute strengths from heatmaps (Frobenius norm of cross-correlation)
+    const strengths = {};
+    let maxStr = 0;
+    if (BD?.heatmaps) {
+        for (const [a, b, key] of PAIRS) {
+            const hm = BD.heatmaps[key];
+            if (!hm) { strengths[key] = 0; continue; }
+            let ss = 0;
+            for (const row of hm) for (const v of row) ss += v * v;
+            strengths[key] = Math.sqrt(ss);
+            maxStr = Math.max(maxStr, strengths[key]);
+        }
+    }
+    maxStr = maxStr || 1;
+
+    // Draw edges
+    for (const [a, b, key] of PAIRS) {
+        const na = nodes[a], nb = nodes[b];
+        const s = (strengths[key] || 0) / maxStr;
+        const isHL = selectedNode === a || selectedNode === b;
+
+        ctx.beginPath();
+        ctx.moveTo(na.x, na.y); ctx.lineTo(nb.x, nb.y);
+        if (isHL) {
+            ctx.strokeStyle = `rgba(52,211,153,${0.4+s*0.6})`;
+            ctx.lineWidth = 2 + s * 8;
+        } else {
+            ctx.strokeStyle = `rgba(148,163,184,${0.05+s*0.3})`;
+            ctx.lineWidth = 0.5 + s * 5;
+        }
+        ctx.stroke();
+
+        // Strength label
+        if (s > 0.15) {
+            const mx = (na.x+nb.x)/2, my = (na.y+nb.y)/2;
+            ctx.font = '10px "JetBrains Mono"';
+            ctx.fillStyle = `rgba(148,163,184,${0.3+s*0.5})`;
+            ctx.textAlign = 'center';
+            ctx.fillText((strengths[key] || 0).toFixed(1), mx, my - 5);
+        }
+    }
+
+    // Draw nodes
+    mods.forEach(m => {
+        const n = nodes[m];
+        const color = MOD_COLORS[m];
+        const isHL = selectedNode === m;
+        const nodeR = isHL ? 36 : 30;
+
+        // Glow
+        const grd = ctx.createRadialGradient(n.x, n.y, nodeR*0.5, n.x, n.y, nodeR*2.5);
+        grd.addColorStop(0, color + (isHL ? '60' : '20'));
+        grd.addColorStop(1, 'transparent');
+        ctx.beginPath(); ctx.arc(n.x, n.y, nodeR*2.5, 0, Math.PI*2);
+        ctx.fillStyle = grd; ctx.fill();
+
+        // Circle
+        ctx.beginPath(); ctx.arc(n.x, n.y, nodeR, 0, Math.PI*2);
+        ctx.fillStyle = isHL ? color : color + '60';
+        ctx.fill();
+        ctx.strokeStyle = color; ctx.lineWidth = isHL ? 3 : 1.5; ctx.stroke();
+
+        // Label
+        ctx.font = `${isHL ? 'bold ' : ''}13px Inter`;
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(MOD_LABELS[m], n.x, n.y);
+    });
+
+    canvas.onclick = (e) => {
+        const cr = canvas.getBoundingClientRect();
+        const mx = e.clientX - cr.left, my = e.clientY - cr.top;
+        let clicked = null;
+        mods.forEach(m => {
+            if (Math.hypot(mx - nodes[m].x, my - nodes[m].y) < 40) clicked = m;
+        });
+        selectedNode = clicked === selectedNode ? null : clicked;
+        renderNetwork();
+    };
+}
+
+function renderConnectionList() {
+    const el = document.getElementById('connectionList');
+    if (!BD?.heatmaps) return;
+    const items = [];
+    for (const [a, b, key] of PAIRS) {
+        const hm = BD.heatmaps[key];
+        if (!hm) continue;
+        let ss = 0;
+        for (const row of hm) for (const v of row) ss += v * v;
+        items.push({ a, b, key, strength: Math.sqrt(ss) });
+    }
+    items.sort((x, y) => y.strength - x.strength);
+    const maxS = items[0]?.strength || 1;
+
+    el.innerHTML = items.map(item => `
+        <div class="flex items-center gap-2 text-xs">
+            <span style="color:${MOD_COLORS[item.a]}">${MOD_LABELS[item.a]}</span>
+            <span class="text-gray-600">-</span>
+            <span style="color:${MOD_COLORS[item.b]}">${MOD_LABELS[item.b]}</span>
+            <div class="flex-1 h-1.5 bg-gray-800 rounded mx-1">
+                <div class="h-full bg-emerald-500/60 rounded" style="width:${(item.strength/maxS*100).toFixed(0)}%"></div>
+            </div>
+            <span class="mono text-gray-400 w-14 text-right">${item.strength.toFixed(2)}</span>
+        </div>
+    `).join('');
+}
+
+function renderLatestMetrics() {
+    const el = document.getElementById('latestMetrics');
+    const m = BD?.latest_metrics;
+    if (!m) { el.innerHTML = '<span class="text-gray-500">No data</span>'; return; }
+    const rows = [
+        ['v2a MRR', m['v2a_MRR'], '#22c55e'],
+        ['v2a R@1', m['v2a_R@1'], '#3b82f6'],
+        ['v2a R@5', m['v2a_R@5'], '#6366f1'],
+        ['Frobenius', m['frobenius_norm'], '#f59e0b'],
+        ['Sparsity', m['sparsity'], '#a855f7'],
+        ['Est. Rank', m['estimated_rank'], '#06b6d4'],
+    ].filter(([,v]) => v != null);
+    el.innerHTML = rows.map(([name, val, color]) =>
+        `<div class="flex justify-between">
+            <span class="text-gray-400">${name}</span>
+            <span class="mono" style="color:${color}">${typeof val === 'number' ? val.toFixed(4) : val}</span>
+        </div>`
+    ).join('');
+}
+
+// ═══════════════════════════ INIT ═══════════════════════════
+loadBrainData();
+window.addEventListener('resize', () => {
+    if (BD) { renderPCA(); renderNetwork(); }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,6 @@
+[build]
+## Uncomment and adjust if libtorch is in a non-standard location:
+# rustflags = ["-L", "/path/to/local/lib"]
+
+[env]
+LIBTORCH_USE_PYTORCH = "1"
