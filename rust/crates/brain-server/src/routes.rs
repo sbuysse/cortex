@@ -2534,36 +2534,11 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     }
     let brain_ctx = brain_ctx_parts.join("; ");
 
-    // ── 3a. Try native HOPE decoder first (Brain-grounded) ─────────────
-    let native_response: Option<String> = if let Some(dec) = &brain.companion_decoder {
-        let (brain_vec, hope_ctx) = {
-            let pm  = brain.personal_memory.lock().unwrap();
-            let wm  = brain.working_memory.lock().unwrap();
-            let fm  = brain.fast_memory.lock().unwrap();
-            let cb  = brain.codebook.lock().unwrap();
-            let bv  = brain_cognition::brain_state::compose_brain_state(
-                &wm,
-                &fm,
-                cb.as_ref(),
-                detected_emotion,
-                &brain.emotion_table,
-            );
-            let ctx = brain_cognition::personal::build_hope_context(&pm);
-            (bv, ctx)
-            // all guards drop here — no Mutex held across the generate call
-        };
-        let response = dec.generate_grounded(&brain_vec, &hope_ctx, &message, 130);
-        if response.trim().chars().count() > 5 { Some(response) } else { None }
-    } else {
-        None
-    };
+    // ── 3. Ollama primary path (qwen2.5:1.5b on-device) ─────────────────
+    // HOPE decoder is kept as last-resort fallback inside the warm-fallback block.
+    let used_native = false;
 
-    let used_native = native_response.is_some();
-
-    // ── 3b. Ollama fallback (only if native decoder unavailable/failed) ──
-    let response: String = if let Some(r) = native_response {
-        r
-    } else {
+    let response: String = {
         // Extract all data from PersonalMemory before any .await (MutexGuard can't cross await)
         let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
         let model = std::env::var("COMPANION_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b".into());
@@ -2581,8 +2556,26 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             &system_prompt, &conversation_history, raw_message, &ollama_url, &model,
         ).await;
 
-        // ── 5. Warm fallback if Ollama is down ────────────────────────
-        ollama_resp.unwrap_or_else(|| {
+        // ── Fallback chain if Ollama is down ────────────────────────
+        // 1. Try HOPE decoder (brain-grounded, low quality but on-device)
+        // 2. Template with emotion prefix
+        ollama_resp.or_else(|| {
+            if let Some(dec) = &brain.companion_decoder {
+                let (brain_vec, hope_ctx) = {
+                    let pm = brain.personal_memory.lock().unwrap();
+                    let wm = brain.working_memory.lock().unwrap();
+                    let fm = brain.fast_memory.lock().unwrap();
+                    let cb = brain.codebook.lock().unwrap();
+                    let bv = brain_cognition::brain_state::compose_brain_state(
+                        &wm, &fm, cb.as_ref(), detected_emotion, &brain.emotion_table,
+                    );
+                    let ctx = brain_cognition::personal::build_hope_context(&pm);
+                    (bv, ctx)
+                };
+                let r = dec.generate_grounded(&brain_vec, &hope_ctx, &message, 80);
+                if r.trim().chars().count() > 5 { Some(r) } else { None }
+            } else { None }
+        }).unwrap_or_else(|| {
             let prefix = brain_cognition::personal::emotion_response_prefix(detected_emotion, &user_name);
             let name = &user_name;
             if detected_emotion != "neutral" && !prefix.is_empty() {
