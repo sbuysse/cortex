@@ -386,6 +386,246 @@ async fn youtube_learn_category(category: &str, brain: &BrainState) -> Result<us
     Ok(pairs)
 }
 
+/// Learn from an academic/educational YouTube video.
+/// Pipeline: download subtitles → extract concepts via Ollama → encode via MiniLM →
+/// feed spiking brain + store in knowledge graph. Also encodes audio → auditory cortex.
+pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<usize, String> {
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    let tmp_dir = format!("/tmp/brain_academic_{ts}");
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+
+    // 1. Search for a video with auto-subtitles
+    let search_query = format!("{query} explained educational");
+    let url_out = tokio::process::Command::new("yt-dlp")
+        .args(["--default-search", "ytsearch1", "--print", "webpage_url",
+               "--match-filter", "duration<600", "--no-download", &search_query])
+        .output().await
+        .map_err(|e| format!("yt-dlp search: {e}"))?;
+
+    let url = String::from_utf8_lossy(&url_out.stdout).trim().to_string();
+    if url.is_empty() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return Err("No video found".into());
+    }
+    tracing::info!("Academic learn: {query} → {url}");
+
+    // 2. Download auto-subtitles + audio
+    let dl = tokio::process::Command::new("yt-dlp")
+        .args(["--write-auto-sub", "--sub-lang", "en", "--skip-download",
+               "--sub-format", "vtt", "-o", &format!("{tmp_dir}/video"), &url])
+        .output().await
+        .map_err(|e| format!("subtitle download: {e}"))?;
+
+    // Also download audio for Whisper encoding
+    let _audio_dl = tokio::process::Command::new("yt-dlp")
+        .args(["-x", "--audio-format", "wav", "--audio-quality", "0",
+               "--match-filter", "duration<600", "-o", &format!("{tmp_dir}/audio.wav"), &url])
+        .output().await;
+
+    // 3. Parse subtitles → transcript text
+    let transcript = {
+        let vtt_pattern = format!("{tmp_dir}/video.en.vtt");
+        let vtt_content = std::fs::read_to_string(&vtt_pattern)
+            .or_else(|_| {
+                // Try alternative subtitle file patterns
+                let entries = std::fs::read_dir(&tmp_dir).map_err(|e| e.to_string())?;
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.ends_with(".vtt") || name.ends_with(".srt") {
+                        return std::fs::read_to_string(entry.path()).map_err(|e| e.to_string());
+                    }
+                }
+                Err("No subtitle file found".to_string())
+            });
+
+        match vtt_content {
+            Ok(vtt) => {
+                // Strip VTT headers, timestamps, and tags — keep only text lines
+                vtt.lines()
+                    .filter(|line| {
+                        let l = line.trim();
+                        !l.is_empty()
+                            && !l.starts_with("WEBVTT")
+                            && !l.starts_with("Kind:")
+                            && !l.starts_with("Language:")
+                            && !l.contains("-->")
+                            && !l.chars().all(|c| c.is_ascii_digit())
+                    })
+                    .map(|line| {
+                        // Strip HTML tags like <c> and timing tags
+                        let mut clean = String::new();
+                        let mut in_tag = false;
+                        for ch in line.chars() {
+                            if ch == '<' { in_tag = true; continue; }
+                            if ch == '>' { in_tag = false; continue; }
+                            if !in_tag { clean.push(ch); }
+                        }
+                        clean
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+            Err(_) => String::new(),
+        }
+    };
+
+    if transcript.len() < 50 {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return Err("Transcript too short or unavailable".into());
+    }
+
+    tracing::info!("Academic learn: got {} chars of transcript", transcript.len());
+
+    // 4. Extract key concepts via Ollama
+    let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
+    let model = std::env::var("COMPANION_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b".into());
+
+    // Truncate transcript to fit in context
+    let truncated_transcript: String = transcript.chars().take(2000).collect();
+    let extract_prompt = format!(
+        "Extract the 10 most important concepts or facts from this transcript. \
+         Return ONLY a JSON array of strings, nothing else.\n\n\
+         Transcript: {truncated_transcript}"
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build().map_err(|e| e.to_string())?;
+
+    let concepts: Vec<String> = match client
+        .post(format!("{ollama_url}/api/generate"))
+        .json(&serde_json::json!({
+            "model": model,
+            "prompt": extract_prompt,
+            "stream": false,
+            "options": {"temperature": 0.3, "num_predict": 500}
+        }))
+        .send().await
+    {
+        Ok(resp) => {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                let text = body["response"].as_str().unwrap_or("[]");
+                // Try to parse JSON array from response
+                serde_json::from_str::<Vec<String>>(text.trim())
+                    .or_else(|_| {
+                        // Try to find JSON array in the response
+                        if let Some(start) = text.find('[') {
+                            if let Some(end) = text.rfind(']') {
+                                return serde_json::from_str(&text[start..=end]);
+                            }
+                        }
+                        Ok(vec![])
+                    })
+                    .unwrap_or_default()
+            } else { vec![] }
+        }
+        Err(_) => vec![],
+    };
+
+    if concepts.is_empty() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return Err("No concepts extracted from transcript".into());
+    }
+
+    tracing::info!("Academic learn: extracted {} concepts: {:?}", concepts.len(), &concepts[..concepts.len().min(5)]);
+
+    // 5. Encode concepts via MiniLM → feed spiking brain + store in KG
+    let mut pairs_generated = 0;
+    let te = brain.text_encoder.as_ref();
+    let mlp = brain.inference.as_ref();
+
+    if let (Some(te), Some(mlp)) = (te, mlp) {
+        for concept in &concepts {
+            if let Ok(t_emb) = te.encode(concept) {
+                let t_proj = mlp.project_visual(&t_emb);
+
+                // Feed into spiking brain association cortex (via text → visual cortex)
+                if let Some(ref sb) = brain.spiking_brain {
+                    let mut sb = sb.lock().unwrap();
+                    let enc_dim = sb.visual_encoder.dim();
+                    let truncated: Vec<f32> = t_emb.iter().take(enc_dim).copied().collect();
+                    if truncated.len() == enc_dim {
+                        sb.process_visual(&truncated);
+                        sb.novelty(0.3); // academic content is novel
+                    }
+                }
+
+                // Store in codebook if new
+                {
+                    let mut cb_guard = brain.codebook.lock().unwrap();
+                    if let Some(cb) = cb_guard.as_mut() {
+                        let existing = cb.nearest(&t_proj, 1);
+                        if existing.is_empty() || existing[0].1 < 0.85 {
+                            cb.add_concept(concept.clone(), &t_proj);
+                            tracing::info!("Academic learn: new concept '{}'", concept);
+                        }
+                    }
+                }
+
+                // Store KG edges: topic → has-concept → concept
+                let _ = brain.memory_db.upsert_edge(query, "has-concept", concept, 0.7);
+
+                // Buffer as learning pair
+                brain.online_pairs.lock().unwrap().push((t_emb, t_proj));
+                pairs_generated += 1;
+            }
+        }
+
+        // Also store concept-to-concept relationships
+        for i in 0..concepts.len() {
+            for j in (i + 1)..concepts.len().min(i + 3) {
+                let _ = brain.memory_db.upsert_edge(&concepts[i], "co-occurs-with", &concepts[j], 0.5);
+            }
+        }
+    }
+
+    // 6. Encode audio via Whisper → feed spiking auditory cortex
+    let pcm_path = format!("{tmp_dir}/audio_16k.raw");
+    let _ffmpeg = tokio::process::Command::new("ffmpeg")
+        .args(["-i", &format!("{tmp_dir}/audio.wav"), "-ar", "16000", "-ac", "1",
+               "-f", "f32le", "-y", &pcm_path])
+        .output().await;
+
+    if let Ok(raw) = std::fs::read(&pcm_path) {
+        let samples: Vec<f32> = raw.chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        if samples.len() > 1600 {
+            let mel = brain_inference::mel::compute_log_mel(&samples);
+            if let Some(whisper) = &brain.audio_encoder {
+                if let Ok(a_emb) = whisper.encode(&mel) {
+                    // Feed audio into spiking auditory cortex
+                    if let Some(ref sb) = brain.spiking_brain {
+                        let mut sb = sb.lock().unwrap();
+                        let enc_dim = sb.audio_encoder.dim();
+                        let truncated: Vec<f32> = a_emb.iter().take(enc_dim).copied().collect();
+                        if truncated.len() == enc_dim {
+                            sb.process_audio(&truncated);
+                        }
+                    }
+                    // Store fast memory
+                    if let Some(mlp) = &brain.inference {
+                        let a_proj = mlp.project_audio(&a_emb);
+                        brain.fast_memory.lock().unwrap().store(&a_proj, query);
+                    }
+                }
+            }
+        }
+    }
+
+    // Log
+    let video_id = url.split("v=").last().unwrap_or("?");
+    let _ = brain.memory_db.log_youtube(video_id, query, "academic_processed", pairs_generated as i64);
+
+    brain.sse.emit("academic_learn", serde_json::json!({
+        "query": query, "url": url, "concepts": concepts,
+        "pairs": pairs_generated, "transcript_chars": transcript.len(),
+    }));
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    Ok(pairs_generated)
+}
+
 /// Enrich knowledge graph from ConceptNet API.
 /// Queries for related concepts and stores edges.
 async fn enrich_from_conceptnet(concept: &str, brain: &BrainState) -> usize {

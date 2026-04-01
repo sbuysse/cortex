@@ -1699,6 +1699,31 @@ pub async fn api_brain_youtube_learn(State(state): State<Arc<AppState>>, Json(bo
     Json(serde_json::json!({"error": "brain not available"})).into_response()
 }
 
+/// Learn from an academic YouTube video — extracts concepts from subtitles,
+/// feeds spiking brain, stores in knowledge graph.
+pub async fn api_brain_learn_academic(State(state): State<Arc<AppState>>, Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    let query = body["query"].as_str().unwrap_or("").to_string();
+    if query.is_empty() {
+        return Json(serde_json::json!({"error": "query required"})).into_response();
+    }
+    if let Some(brain) = &state.brain {
+        match brain_cognition::autonomy::youtube_learn_academic(&query, brain).await {
+            Ok(pairs) => Json(serde_json::json!({
+                "status": "learned",
+                "query": query,
+                "concepts_learned": pairs,
+            })).into_response(),
+            Err(e) => Json(serde_json::json!({
+                "status": "error",
+                "query": query,
+                "error": e,
+            })).into_response(),
+        }
+    } else {
+        Json(serde_json::json!({"error": "brain not available"})).into_response()
+    }
+}
+
 // ─── Phase 2: Episodic Memory ──────────────────────────────────
 pub async fn api_brain_episodes(Query(q): Query<std::collections::HashMap<String, String>>) -> impl IntoResponse {
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20);
