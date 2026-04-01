@@ -1,4 +1,5 @@
 use crate::network::SpikingNetwork;
+use crate::structural;
 use crate::synapse::{weight_from_i16, weight_to_i16};
 
 pub fn nrem_consolidation(net: &mut SpikingNetwork, steps: usize, weight_decay: f32) {
@@ -51,5 +52,18 @@ pub fn sleep_cycle(net: &mut SpikingNetwork, total_steps: usize) {
     tracing::info!("Sleep cycle: NREM {nrem_steps} steps, REM {rem_steps} steps");
     nrem_consolidation(net, nrem_steps, 0.98);
     rem_consolidation(net, rem_steps, 0.95);
+
+    // Structural plasticity: accumulate scores, decay, prune weak synapses
+    let mut total_pruned = 0;
+    for region_id in 0..net.num_regions() {
+        if let Some(synapses) = net.region_mut(region_id).synapses_mut() {
+            structural::accumulate_structural_scores(synapses);
+            structural::decay_structural_scores(synapses, 240, 256); // ~0.94 decay
+            total_pruned += structural::prune_weak_synapses(synapses, 3); // prune very weak
+        }
+    }
+    if total_pruned > 0 {
+        tracing::info!("Structural pruning: {total_pruned} synapses pruned");
+    }
     tracing::info!("Sleep cycle complete");
 }
