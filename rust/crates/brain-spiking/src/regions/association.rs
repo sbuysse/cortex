@@ -1,6 +1,18 @@
 use crate::config::{NeuronParams, RegionConfig};
-use crate::network::{SpikingNetwork, NetworkConfig};
+use crate::network::{NetworkConfig, SpikingNetwork};
 use rand::Rng;
+
+/// Config-only version for use in full brain builder.
+pub fn association_cortex_config(scale: f32) -> RegionConfig {
+    let n = ((500_000.0 * scale) as usize).max(20);
+    let n_exc = (n * 4) / 5;
+    RegionConfig {
+        name: "association_cortex".into(),
+        num_excitatory: n_exc,
+        num_inhibitory: n - n_exc,
+        neuron_params: NeuronParams::default(),
+    }
+}
 
 /// Build an association cortex with random initial connectivity.
 /// `n`: total neurons (80% excitatory, 20% inhibitory)

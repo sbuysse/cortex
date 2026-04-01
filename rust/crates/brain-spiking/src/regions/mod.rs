@@ -1,1 +1,11 @@
 pub mod association;
+pub mod visual;
+pub mod auditory;
+pub mod predictive;
+pub mod hippocampus;
+pub mod prefrontal;
+pub mod amygdala;
+pub mod motor;
+pub mod brainstem;
+pub mod cerebellum;
+pub mod full_brain;
