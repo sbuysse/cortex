@@ -1,5 +1,6 @@
 pub mod config;
 pub mod neuromodulation;
+pub mod network;
 pub mod neuron;
 pub mod plasticity;
 pub mod region;
