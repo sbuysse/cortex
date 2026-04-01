@@ -7,6 +7,7 @@ pub mod region;
 pub mod regions;
 pub mod sleep;
 pub mod spike_decoder;
+pub mod structural;
 pub mod spike_encoder;
 pub mod synapse;
 pub mod synapse_mmap;

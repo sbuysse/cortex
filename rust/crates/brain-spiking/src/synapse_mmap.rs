@@ -51,6 +51,10 @@ impl SynapseCSR {
             f.write_all(&v.to_le_bytes())?;
         }
 
+        // structural_scores: Vec<u8>
+        let mut f = File::create(dir.join("structural_scores.bin"))?;
+        f.write_all(&self.structural_scores)?;
+
         Ok(())
     }
 }
@@ -60,12 +64,13 @@ impl SynapseCSR {
 pub struct MmapSynapseCSR {
     num_neurons: usize,
     num_synapses: usize,
-    row_ptr: Mmap,          // u64 array
-    col_idx: Mmap,          // u32 array
-    weights: MmapMut,       // i16 array (mutable for learning)
-    weight_refs: MmapMut,   // i16 array (mutable for TACOS)
-    delays: Mmap,           // u8 array (immutable)
-    eligibilities: MmapMut, // i16 array (mutable for learning)
+    row_ptr: Mmap,               // u64 array
+    col_idx: Mmap,               // u32 array
+    weights: MmapMut,            // i16 array (mutable for learning)
+    weight_refs: MmapMut,        // i16 array (mutable for TACOS)
+    delays: Mmap,                // u8 array (immutable)
+    eligibilities: MmapMut,      // i16 array (mutable for learning)
+    structural_scores: MmapMut,  // u8 array (mutable for structural plasticity)
 }
 
 impl MmapSynapseCSR {
@@ -106,6 +111,21 @@ impl MmapSynapseCSR {
             )?
         };
 
+        // structural_scores: create file with zeros if it doesn't exist (backward compat)
+        let scores_path = dir.join("structural_scores.bin");
+        if !scores_path.exists() {
+            let mut f = File::create(&scores_path)?;
+            f.write_all(&vec![0u8; num_synapses])?;
+        }
+        let structural_scores = unsafe {
+            MmapMut::map_mut(
+                &File::options()
+                    .read(true)
+                    .write(true)
+                    .open(&scores_path)?,
+            )?
+        };
+
         Ok(Self {
             num_neurons,
             num_synapses,
@@ -115,6 +135,7 @@ impl MmapSynapseCSR {
             weight_refs,
             delays,
             eligibilities,
+            structural_scores,
         })
     }
 
@@ -166,6 +187,7 @@ impl MmapSynapseCSR {
         self.weights.flush()?;
         self.weight_refs.flush()?;
         self.eligibilities.flush()?;
+        self.structural_scores.flush()?;
         Ok(())
     }
 }

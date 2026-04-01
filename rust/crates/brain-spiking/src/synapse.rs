@@ -18,6 +18,7 @@ pub struct SynapseView {
     pub weight_ref: i16,
     pub delay: u8,
     pub eligibility: i16,
+    pub structural_score: u8,
 }
 
 impl SynapseView {
@@ -89,7 +90,9 @@ impl SynapseBuilder {
         }
         row_ptr.push(nnz as u64);
 
-        SynapseCSR { row_ptr, col_idx, weights, weight_refs, delays, eligibilities, num_neurons: n }
+        let structural_scores = vec![0u8; nnz];
+
+        SynapseCSR { row_ptr, col_idx, weights, weight_refs, delays, eligibilities, structural_scores, num_neurons: n }
     }
 }
 
@@ -101,6 +104,7 @@ pub struct SynapseCSR {
     pub weight_refs: Vec<i16>,
     pub delays: Vec<u8>,
     pub eligibilities: Vec<i16>,
+    pub structural_scores: Vec<u8>,
     num_neurons: usize,
 }
 
@@ -118,6 +122,7 @@ impl SynapseCSR {
             weight_ref: self.weight_refs[i],
             delay: self.delays[i],
             eligibility: self.eligibilities[i],
+            structural_score: self.structural_scores[i],
         }).collect()
     }
 
