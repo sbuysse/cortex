@@ -33,8 +33,9 @@ pub fn build_association_cortex(n: usize, connection_prob: f32) -> SpikingNetwor
     let mut net = SpikingNetwork::new(config);
     let mut rng = rand::rng();
 
-    // Sample connections directly: O(connections) instead of O(n^2)
-    let n_connections = ((n as f64 * n as f64 * connection_prob as f64) as usize).max(1);
+    // Each neuron gets ~(connection_prob * 2000) connections (linear, not quadratic)
+    let avg_fanout = (connection_prob * 2000.0) as usize;
+    let n_connections = (n * avg_fanout).max(1);
     for _ in 0..n_connections {
         let src = rng.random_range(0..n);
         let mut tgt = rng.random_range(0..n);

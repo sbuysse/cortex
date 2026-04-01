@@ -49,10 +49,12 @@ pub fn build_full_brain(scale: f32, intra_prob: f32, inter_frac: f32) -> Spiking
     let mut rng = rand::rng();
 
     // ── Intra-region random sparse connectivity ──
-    // Sample connections directly: O(connections) instead of O(n^2)
+    // Each neuron gets ~(intra_prob * 1000) connections (biological: ~1K-10K per neuron).
+    // Total connections = n * avg_fanout, NOT n^2 * prob (which is quadratic and OOM-deadly).
     for (region_id, &n) in region_sizes.iter().enumerate() {
         let n_exc = (n * 4) / 5;
-        let n_connections = ((n as f64 * n as f64 * intra_prob as f64) as usize).max(1);
+        let avg_fanout = (intra_prob * 2000.0) as usize; // 5% → 100 connections/neuron
+        let n_connections = (n * avg_fanout).max(1);
         for _ in 0..n_connections {
             let src = rng.random_range(0..n);
             let mut tgt = rng.random_range(0..n);
