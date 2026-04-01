@@ -49,24 +49,22 @@ pub fn build_full_brain(scale: f32, intra_prob: f32, inter_frac: f32) -> Spiking
     let mut rng = rand::rng();
 
     // ── Intra-region random sparse connectivity ──
+    // Sample connections directly: O(connections) instead of O(n^2)
     for (region_id, &n) in region_sizes.iter().enumerate() {
-        let n_exc = (n * 4) / 5; // approximate; actual ratio is in config
-        for src in 0..n {
-            for tgt in 0..n {
-                if src == tgt {
-                    continue;
-                }
-                if rng.random::<f32>() < intra_prob {
-                    let is_inh = src >= n_exc;
-                    let w = if is_inh {
-                        -rng.random_range(0.1..0.5)
-                    } else {
-                        rng.random_range(0.01..0.3)
-                    };
-                    let delay = rng.random_range(0..5_u8);
-                    net.connect_intra(region_id, src, tgt, w, delay);
-                }
-            }
+        let n_exc = (n * 4) / 5;
+        let n_connections = ((n as f64 * n as f64 * intra_prob as f64) as usize).max(1);
+        for _ in 0..n_connections {
+            let src = rng.random_range(0..n);
+            let mut tgt = rng.random_range(0..n);
+            if tgt == src { tgt = (src + 1) % n; } // avoid self-connection
+            let is_inh = src >= n_exc;
+            let w = if is_inh {
+                -rng.random_range(0.1..0.5)
+            } else {
+                rng.random_range(0.01..0.3)
+            };
+            let delay = rng.random_range(0..5_u8);
+            net.connect_intra(region_id, src, tgt, w, delay);
         }
     }
 

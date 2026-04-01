@@ -33,20 +33,20 @@ pub fn build_association_cortex(n: usize, connection_prob: f32) -> SpikingNetwor
     let mut net = SpikingNetwork::new(config);
     let mut rng = rand::rng();
 
-    for src in 0..n {
-        for tgt in 0..n {
-            if src == tgt { continue; }
-            if rng.random::<f32>() < connection_prob {
-                let is_inhibitory = src >= n_exc;
-                let weight = if is_inhibitory {
-                    -rng.random_range(0.1..0.5)
-                } else {
-                    rng.random_range(0.01..0.3)
-                };
-                let delay = rng.random_range(0..5_u8);
-                net.connect_intra(0, src, tgt, weight, delay);
-            }
-        }
+    // Sample connections directly: O(connections) instead of O(n^2)
+    let n_connections = ((n as f64 * n as f64 * connection_prob as f64) as usize).max(1);
+    for _ in 0..n_connections {
+        let src = rng.random_range(0..n);
+        let mut tgt = rng.random_range(0..n);
+        if tgt == src { tgt = (src + 1) % n; }
+        let is_inhibitory = src >= n_exc;
+        let weight = if is_inhibitory {
+            -rng.random_range(0.1..0.5)
+        } else {
+            rng.random_range(0.01..0.3)
+        };
+        let delay = rng.random_range(0..5_u8);
+        net.connect_intra(0, src, tgt, weight, delay);
     }
 
     net.finalize();
