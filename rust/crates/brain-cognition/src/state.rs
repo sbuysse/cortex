@@ -31,6 +31,7 @@ pub struct BrainState {
     pub clip_encoder: Option<brain_inference::CLIPEncoder>,
     pub audio_encoder: Option<brain_inference::WhisperEncoder>,
     pub companion_decoder: Option<brain_inference::CompanionDecoder>,
+    pub spiking_brain: Option<std::sync::Mutex<brain_spiking::SpikingBrain>>,
     pub emotion_table: Vec<[f32; 512]>,
     pub online_pairs: std::sync::Mutex<Vec<(Vec<f32>, Vec<f32>)>>,
     pub online_learning_count: std::sync::atomic::AtomicI64,
@@ -136,6 +137,19 @@ impl BrainState {
             }
         };
 
+        let spiking_brain = {
+            let n = std::env::var("SPIKING_NEURONS")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            if n > 0 {
+                tracing::info!("Initializing spiking brain with {n} association cortex neurons");
+                Some(std::sync::Mutex::new(brain_spiking::SpikingBrain::new(n)))
+            } else {
+                None
+            }
+        };
+
         let emotion_table_path = config.project_root
             .join("outputs/cortex/hope_companion/emotion_table.bin");
         let emotion_table = crate::brain_state::load_emotion_table(&emotion_table_path);
@@ -193,6 +207,7 @@ impl BrainState {
             clip_encoder,
             audio_encoder,
             companion_decoder,
+            spiking_brain,
             emotion_table,
             online_pairs: std::sync::Mutex::new(Vec::new()),
             online_learning_count: std::sync::atomic::AtomicI64::new(online_count),

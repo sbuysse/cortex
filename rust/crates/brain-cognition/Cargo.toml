@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 brain-inference = { path = "../brain-inference" }
 brain-db = { path = "../brain-db" }
+brain-spiking = { path = "../brain-spiking" }
 rusqlite = { workspace = true }
 # Use ndarray WITHOUT blas feature to avoid linking issues
 # Our operations are small vectors (512-dim), BLAS overhead isn't needed
