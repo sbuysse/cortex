@@ -26,7 +26,24 @@ pub struct SpikingBrain {
 }
 
 impl SpikingBrain {
-    pub fn new(n_assoc: usize) -> Self {
+    /// Create a spiking brain with all 10 regions.
+    /// `scale`: neuron count multiplier (0.01 = tiny test, 1.0 = full ~2M neurons).
+    pub fn new(scale: f32) -> Self {
+        let net = regions::full_brain::build_full_brain(scale, 0.05, 0.1);
+        let vis_n = net.region(regions::full_brain::VISUAL).num_neurons();
+        let aud_n = net.region(regions::full_brain::AUDITORY).num_neurons();
+        let total_n: usize = (0..net.num_regions()).map(|i| net.region(i).num_neurons()).sum();
+        Self {
+            network: net,
+            visual_encoder: LatencyEncoder::new(vis_n.min(512), 20),
+            audio_encoder: LatencyEncoder::new(aud_n.min(512), 20),
+            decoder: RateDecoder::new(total_n, 50),
+            encoding_window: 20,
+        }
+    }
+
+    /// Create with just the association cortex (backward compat).
+    pub fn new_association_only(n_assoc: usize) -> Self {
         let net = regions::association::build_association_cortex(n_assoc, 0.05);
         let half = n_assoc / 2;
         Self {
@@ -39,21 +56,35 @@ impl SpikingBrain {
     }
 
     pub fn process_visual(&mut self, embedding: &[f32]) {
+        let region_id = if self.network.num_regions() >= 10 {
+            regions::full_brain::VISUAL
+        } else {
+            0
+        };
         let spike_times = self.visual_encoder.encode(embedding);
         for step in 0..self.encoding_window {
             for (i, &t) in spike_times.iter().enumerate() {
-                if t == step { self.network.inject_current(0, i, 3.0); }
+                if t == step { self.network.inject_current(region_id, i, 3.0); }
             }
             self.network.step();
         }
     }
 
     pub fn process_audio(&mut self, embedding: &[f32]) {
-        let half = self.network.region(0).num_neurons() / 2;
+        let region_id = if self.network.num_regions() >= 10 {
+            regions::full_brain::AUDITORY
+        } else {
+            0
+        };
+        let offset = if self.network.num_regions() < 10 {
+            self.network.region(0).num_neurons() / 2
+        } else {
+            0
+        };
         let spike_times = self.audio_encoder.encode(embedding);
         for step in 0..self.encoding_window {
             for (i, &t) in spike_times.iter().enumerate() {
-                if t == step { self.network.inject_current(0, half + i, 3.0); }
+                if t == step { self.network.inject_current(region_id, offset + i, 3.0); }
             }
             self.network.step();
         }

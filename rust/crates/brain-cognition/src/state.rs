@@ -138,13 +138,14 @@ impl BrainState {
         };
 
         let spiking_brain = {
-            let n = std::env::var("SPIKING_NEURONS")
+            // SPIKING_SCALE=0.01 for tiny test, 1.0 for full ~2M neurons
+            let scale: f32 = std::env::var("SPIKING_SCALE")
                 .ok()
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(0);
-            if n > 0 {
-                tracing::info!("Initializing spiking brain with {n} association cortex neurons");
-                Some(std::sync::Mutex::new(brain_spiking::SpikingBrain::new(n)))
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
+            if scale > 0.0 {
+                tracing::info!("Initializing spiking brain (10 regions, scale={scale})");
+                Some(std::sync::Mutex::new(brain_spiking::SpikingBrain::new(scale)))
             } else {
                 None
             }
