@@ -394,11 +394,11 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
     let tmp_dir = format!("/tmp/brain_academic_{ts}");
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
 
-    // 1. Search for a video with auto-subtitles
+    // 1. Search for a video (no duration filter on search — metadata not always available)
     let search_query = format!("{query} explained educational");
     let url_out = tokio::process::Command::new("yt-dlp")
         .args(["--default-search", "ytsearch1", "--print", "webpage_url",
-               "--match-filter", "duration<600", "--no-download", &search_query])
+               "--no-download", &search_query])
         .output().await
         .map_err(|e| format!("yt-dlp search: {e}"))?;
 
