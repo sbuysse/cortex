@@ -8,6 +8,8 @@ pub struct LatencyEncoder {
 impl LatencyEncoder {
     pub fn new(dim: usize, t_max: u16) -> Self { Self { dim, t_max } }
 
+    pub fn dim(&self) -> usize { self.dim }
+
     pub fn encode(&self, embedding: &[f32]) -> Vec<u16> {
         assert_eq!(embedding.len(), self.dim);
         embedding.iter().map(|&v| {

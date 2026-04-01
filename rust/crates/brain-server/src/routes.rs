@@ -2524,6 +2524,47 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         (related, fm_matches, kg_facts)
     } else { (vec![], vec![], vec![]) };
 
+    // ── 2b. Feed spiking brain ─────────────────────────────────────
+    let spiking_ctx = if let Some(ref sb) = brain.spiking_brain {
+        // Encode message text into spiking substrate
+        let text_emb = brain.text_encoder.as_ref()
+            .and_then(|te| te.encode(&message).ok());
+
+        if let Some(emb) = text_emb {
+            let mut sb = sb.lock().unwrap();
+
+            // Feed text embedding as visual input (text is a "modality")
+            let enc_dim = sb.visual_encoder.dim();
+            let truncated: Vec<f32> = emb.iter().take(enc_dim).copied().collect();
+            if truncated.len() == enc_dim {
+                sb.process_visual(&truncated);
+            }
+
+            // Feed emotion into neuromodulators
+            match detected_emotion {
+                "happy" => { sb.reward(0.5); }
+                "sad" | "pain" => { sb.network.modulators.arousal(0.3); }
+                "fearful" => { sb.network.modulators.arousal(0.8); }
+                "confused" => { sb.novelty(0.5); }
+                _ => {}
+            }
+
+            // Read brain state for LLM context
+            let stats = sb.stats();
+            let mods = &sb.network.modulators;
+            Some(format!(
+                "spiking brain: {} neurons across {} regions, {} active spikes; \
+                 neuromodulators: dopamine={:.2} acetylcholine={:.2} norepinephrine={:.2} serotonin={:.2}",
+                stats.total_neurons, stats.num_regions, stats.total_spikes_last_step,
+                mods.dopamine, mods.acetylcholine, mods.norepinephrine, mods.serotonin
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Compact brain context note for the LLM (grounding without overwhelming it)
     let mut brain_ctx_parts = Vec::new();
     if !wm_focus.is_empty() {
@@ -2531,6 +2572,9 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     }
     if !kg_facts.is_empty() {
         brain_ctx_parts.push(format!("knows that {}", kg_facts[0]));
+    }
+    if let Some(ref sc) = spiking_ctx {
+        brain_ctx_parts.push(sc.clone());
     }
     let brain_ctx = brain_ctx_parts.join("; ");
 
@@ -2591,6 +2635,12 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     // Store Cortex response
     brain_cognition::personal::store_conversation(&mut brain.personal_memory.lock().unwrap(), "cortex", &response, Some(detected_emotion));
 
+    // Reward the spiking brain for successful interaction
+    if let Some(ref sb) = brain.spiking_brain {
+        let mut sb = sb.lock().unwrap();
+        sb.reward(0.3); // mild positive reward for each completed dialogue turn
+    }
+
     let facts_extracted: Vec<String> = facts.iter()
         .map(|f| format!("{} {} {}", f.subject, f.relation, f.object)).collect();
 
@@ -2606,6 +2656,7 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         "facts_extracted": facts_extracted,
         "grounded": true,
         "native": used_native,
+        "spiking_brain": spiking_ctx.is_some(),
         "process_time": 0.0,
     }))
 }
