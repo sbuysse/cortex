@@ -5,9 +5,11 @@ pub mod neuron;
 pub mod plasticity;
 pub mod region;
 pub mod regions;
+pub mod sleep;
 pub mod spike_decoder;
 pub mod spike_encoder;
 pub mod synapse;
+pub mod synapse_mmap;
 
 use network::{SpikingNetwork, NetworkStats};
 use spike_encoder::LatencyEncoder;
