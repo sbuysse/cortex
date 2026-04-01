@@ -1701,6 +1701,7 @@ pub async fn api_brain_youtube_learn(State(state): State<Arc<AppState>>, Json(bo
 
 /// Learn from an academic YouTube video — extracts concepts from subtitles,
 /// feeds spiking brain, stores in knowledge graph.
+#[axum::debug_handler]
 pub async fn api_brain_learn_academic(State(state): State<Arc<AppState>>, Json(body): Json<serde_json::Value>) -> impl IntoResponse {
     let query = body["query"].as_str().unwrap_or("").to_string();
     if query.is_empty() {

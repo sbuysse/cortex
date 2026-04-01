@@ -476,135 +476,124 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
 
     tracing::info!("Academic learn: got {} chars of transcript", transcript.len());
 
-    // 4. Extract key concepts via Ollama
-    // Use a separate (GPU-backed) Ollama for extraction — local CPU is too slow with large brain
-    let ollama_url = std::env::var("EXTRACT_OLLAMA_URL")
-        .unwrap_or_else(|_| std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into()));
-    let extract_model = std::env::var("EXTRACT_MODEL").unwrap_or_else(|_| "qwen3:32b".into());
+    // 4. Extract key concepts — pure local: split transcript into sentences,
+    //    encode via MiniLM, match against codebook. No LLM needed.
+    let te = brain.text_encoder.as_ref().ok_or("No text encoder")?;
+    let mlp = brain.inference.as_ref().ok_or("No MLP encoder")?;
 
-    let truncated_transcript: String = transcript.chars().take(2000).collect();
-    let extract_prompt = format!(
-        "Extract the 10 most important concepts or facts from this transcript. \
-         Return a JSON object with a \"concepts\" key containing an array of strings.\n\n\
-         Transcript: {truncated_transcript}"
-    );
+    // Split transcript into sentences (on ., !, ?)
+    let sentences: Vec<&str> = transcript.split(|c: char| c == '.' || c == '!' || c == '?')
+        .map(|s| s.trim())
+        .filter(|s| s.len() > 20) // skip fragments
+        .collect();
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build().map_err(|e| e.to_string())?;
+    tracing::info!("Academic learn: {} sentences from transcript", sentences.len());
 
-    let concepts: Vec<String> = match client
-        .post(format!("{ollama_url}/api/generate"))
-        .json(&serde_json::json!({
-            "model": extract_model,
-            "prompt": extract_prompt,
-            "stream": false,
-            "format": "json",
-            "options": {"temperature": 0.3, "num_predict": 500}
-        }))
-        .send().await
-    {
-        Ok(resp) => {
-            if let Ok(body) = resp.json::<serde_json::Value>().await {
-                let text = body["response"].as_str().unwrap_or("{}");
-                tracing::info!("Academic learn: Ollama response (first 300): {}", &text[..text.len().min(300)]);
-                // Parse as JSON object with "concepts" key
-                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(text) {
-                    if let Some(arr) = obj.get("concepts").and_then(|v| v.as_array()) {
-                        arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-                    } else if let Some(arr) = obj.as_array() {
-                        // Direct array fallback
-                        arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-                    } else {
-                        // Try all string values from any object structure
-                        let mut result = Vec::new();
-                        if let Some(map) = obj.as_object() {
-                            for v in map.values() {
-                                if let Some(s) = v.as_str() {
-                                    result.push(s.to_string());
-                                } else if let Some(arr) = v.as_array() {
-                                    for item in arr {
-                                        if let Some(s) = item.as_str() {
-                                            result.push(s.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        result
-                    }
-                } else { vec![] }
-            } else { vec![] }
+    // Encode each sentence, find nearest codebook concepts
+    let mut concept_scores: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    let cb_guard = brain.codebook.lock().unwrap();
+    let cb = cb_guard.as_ref().ok_or("No codebook")?;
+
+    for sentence in sentences.iter().take(50) { // cap at 50 sentences
+        if let Ok(emb) = te.encode(sentence) {
+            let proj = mlp.project_visual(&emb);
+            let nearest = cb.nearest(&proj, 3);
+            for (label, sim) in &nearest {
+                if *sim > 0.3 { // only meaningful matches
+                    *concept_scores.entry(label.clone()).or_insert(0.0) += sim;
+                }
+            }
         }
-        Err(e) => {
-            tracing::warn!("Academic learn: Ollama call failed: {e}");
-            vec![]
-        }
-    };
+    }
 
-    if concepts.is_empty() {
+    // Sort by accumulated score, take top 10
+    let mut scored: Vec<(String, f32)> = concept_scores.into_iter().collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let concepts: Vec<String> = scored.into_iter().take(10).map(|(label, _)| label).collect();
+
+    // Also extract novel concepts: sentences that DON'T match the codebook well
+    let mut novel_concepts = Vec::new();
+    for sentence in sentences.iter().take(50) {
+        if let Ok(emb) = te.encode(sentence) {
+            let proj = mlp.project_visual(&emb);
+            let nearest = cb.nearest(&proj, 1);
+            if nearest.is_empty() || nearest[0].1 < 0.4 {
+                // This sentence is about something the codebook doesn't know
+                // Use the first few words as a concept label
+                let label: String = sentence.split_whitespace().take(5).collect::<Vec<_>>().join(" ");
+                if label.len() > 10 {
+                    novel_concepts.push((label, proj));
+                }
+            }
+        }
+    }
+
+    drop(cb_guard); // release lock before mutating
+
+    // Add novel concepts to codebook
+    if !novel_concepts.is_empty() {
+        let mut cb_guard = brain.codebook.lock().unwrap();
+        if let Some(cb) = cb_guard.as_mut() {
+            for (label, proj) in &novel_concepts {
+                cb.add_concept(label.clone(), proj);
+            }
+            tracing::info!("Academic learn: added {} novel concepts to codebook", novel_concepts.len());
+        }
+    }
+
+    let all_concepts: Vec<String> = concepts.iter()
+        .chain(novel_concepts.iter().map(|(l, _)| l))
+        .cloned()
+        .collect();
+
+    if all_concepts.is_empty() {
         let _ = std::fs::remove_dir_all(&tmp_dir);
         return Err("No concepts extracted from transcript".into());
     }
 
-    tracing::info!("Academic learn: extracted {} concepts: {:?}", concepts.len(), &concepts[..concepts.len().min(5)]);
+    tracing::info!("Academic learn: extracted {} concepts: {:?}",
+        all_concepts.len(), &all_concepts[..all_concepts.len().min(5)]);
 
-    // 5. Encode concepts via MiniLM → feed spiking brain + store in KG
+    // 5. Feed concepts into spiking brain + store in KG
     let mut pairs_generated = 0;
-    let te = brain.text_encoder.as_ref();
-    let mlp = brain.inference.as_ref();
 
-    if let (Some(te), Some(mlp)) = (te, mlp) {
-        for concept in &concepts {
-            if let Ok(t_emb) = te.encode(concept) {
-                let t_proj = mlp.project_visual(&t_emb);
+    for concept in &all_concepts {
+        if let Ok(t_emb) = te.encode(concept) {
+            let t_proj = mlp.project_visual(&t_emb);
 
-                // Feed into spiking brain association cortex (via text → visual cortex)
-                if let Some(ref sb) = brain.spiking_brain {
-                    let mut sb = sb.lock().unwrap();
-                    let enc_dim = sb.visual_encoder.dim();
-                    let truncated: Vec<f32> = t_emb.iter().take(enc_dim).copied().collect();
-                    if truncated.len() == enc_dim {
-                        sb.process_visual(&truncated);
-                        sb.novelty(0.3); // academic content is novel
-                    }
+            // Feed into spiking brain
+            if let Some(ref sb) = brain.spiking_brain {
+                let mut sb = sb.lock().unwrap();
+                let enc_dim = sb.visual_encoder.dim();
+                let truncated: Vec<f32> = t_emb.iter().take(enc_dim).copied().collect();
+                if truncated.len() == enc_dim {
+                    sb.process_visual(&truncated);
+                    sb.novelty(0.3);
                 }
-
-                // Store in codebook if new
-                {
-                    let mut cb_guard = brain.codebook.lock().unwrap();
-                    if let Some(cb) = cb_guard.as_mut() {
-                        let existing = cb.nearest(&t_proj, 1);
-                        if existing.is_empty() || existing[0].1 < 0.85 {
-                            cb.add_concept(concept.clone(), &t_proj);
-                            tracing::info!("Academic learn: new concept '{}'", concept);
-                        }
-                    }
-                }
-
-                // Store KG edges: topic → has-concept → concept
-                let _ = brain.memory_db.upsert_edge(query, "has-concept", concept, 0.7);
-
-                // Buffer as learning pair
-                brain.online_pairs.lock().unwrap().push((t_emb, t_proj));
-                pairs_generated += 1;
             }
+
+            // Store KG edges: topic → has-concept → concept
+            let _ = brain.memory_db.upsert_edge(query, "has-concept", concept, 0.7);
+
+            // Buffer as learning pair
+            brain.online_pairs.lock().unwrap().push((t_emb, t_proj));
+            pairs_generated += 1;
         }
+    }
 
-        // Also store concept-to-concept relationships
-        for i in 0..concepts.len() {
-            for j in (i + 1)..concepts.len().min(i + 3) {
-                let _ = brain.memory_db.upsert_edge(&concepts[i], "co-occurs-with", &concepts[j], 0.5);
-            }
+    // Concept-to-concept co-occurrence edges
+    for i in 0..all_concepts.len() {
+        for j in (i + 1)..all_concepts.len().min(i + 3) {
+            let _ = brain.memory_db.upsert_edge(&all_concepts[i], "co-occurs-with", &all_concepts[j], 0.5);
         }
     }
 
     // 6. Encode audio via Whisper → feed spiking auditory cortex
     let pcm_path = format!("{tmp_dir}/audio_16k.raw");
-    let _ffmpeg = tokio::process::Command::new("ffmpeg")
+    let _ = std::process::Command::new("ffmpeg")
         .args(["-i", &format!("{tmp_dir}/audio.wav"), "-ar", "16000", "-ac", "1",
                "-f", "f32le", "-y", &pcm_path])
-        .output().await;
+        .output();
 
     if let Ok(raw) = std::fs::read(&pcm_path) {
         let samples: Vec<f32> = raw.chunks_exact(4)
@@ -638,7 +627,7 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
     let _ = brain.memory_db.log_youtube(video_id, query, "academic_processed", pairs_generated as i64);
 
     brain.sse.emit("academic_learn", serde_json::json!({
-        "query": query, "url": url, "concepts": concepts,
+        "query": query, "url": url, "concepts": all_concepts,
         "pairs": pairs_generated, "transcript_chars": transcript.len(),
     }));
 
