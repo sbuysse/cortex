@@ -26,8 +26,8 @@ pub const BRAINSTEM: BrainRegionId = 8;
 pub const CEREBELLUM: BrainRegionId = 9;
 
 /// Build the complete 10-region brain.
-/// `scale`: neuron count multiplier (0.01 = tiny test, 1.0 = full scale ~2M neurons)
-/// `intra_prob`: intra-region connection probability
+/// `scale`: neuron count multiplier (0.01 = tiny test, 1.0 = full ~2M neurons)
+/// `intra_prob`: controls avg fanout per neuron (fanout = intra_prob * 20000, e.g. 0.05 → 1000)
 /// `inter_frac`: fraction of neurons in each region that project to connected regions
 pub fn build_full_brain(scale: f32, intra_prob: f32, inter_frac: f32) -> SpikingNetwork {
     let configs: Vec<RegionConfig> = vec![
@@ -53,7 +53,7 @@ pub fn build_full_brain(scale: f32, intra_prob: f32, inter_frac: f32) -> Spiking
     // Total connections = n * avg_fanout, NOT n^2 * prob (which is quadratic and OOM-deadly).
     for (region_id, &n) in region_sizes.iter().enumerate() {
         let n_exc = (n * 4) / 5;
-        let avg_fanout = (intra_prob * 2000.0) as usize; // 5% → 100 connections/neuron
+        let avg_fanout = (intra_prob * 20_000.0) as usize; // 0.05 → 1000 connections/neuron
         let n_connections = (n * avg_fanout).max(1);
         for _ in 0..n_connections {
             let src = rng.random_range(0..n);
