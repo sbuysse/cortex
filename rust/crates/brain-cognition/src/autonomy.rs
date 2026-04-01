@@ -476,9 +476,11 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
 
     tracing::info!("Academic learn: got {} chars of transcript", transcript.len());
 
-    // 4. Extract key concepts via Ollama (use 3b for reliable JSON)
-    let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
-    let extract_model = std::env::var("EXTRACT_MODEL").unwrap_or_else(|_| "qwen2.5:3b".into());
+    // 4. Extract key concepts via Ollama
+    // Use a separate (GPU-backed) Ollama for extraction — local CPU is too slow with large brain
+    let ollama_url = std::env::var("EXTRACT_OLLAMA_URL")
+        .unwrap_or_else(|_| std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into()));
+    let extract_model = std::env::var("EXTRACT_MODEL").unwrap_or_else(|_| "qwen3:32b".into());
 
     let truncated_transcript: String = transcript.chars().take(2000).collect();
     let extract_prompt = format!(
