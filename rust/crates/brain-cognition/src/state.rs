@@ -145,7 +145,13 @@ impl BrainState {
                 .unwrap_or(0.0);
             if scale > 0.0 {
                 tracing::info!("Initializing spiking brain (10 regions, scale={scale})");
-                Some(std::sync::Mutex::new(brain_spiking::SpikingBrain::new(scale)))
+                let mut sb = brain_spiking::SpikingBrain::new(scale);
+                let save_dir = config.project_root.join("outputs/cortex");
+                let loaded = sb.load(&save_dir);
+                if loaded > 0 {
+                    tracing::info!("Restored saved weights for {loaded} spiking brain regions");
+                }
+                Some(std::sync::Mutex::new(sb))
             } else {
                 None
             }

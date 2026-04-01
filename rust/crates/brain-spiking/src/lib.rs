@@ -94,4 +94,108 @@ impl SpikingBrain {
     pub fn novelty(&mut self, magnitude: f32) { self.network.modulators.novelty(magnitude); }
 
     pub fn stats(&self) -> NetworkStats { self.network.stats() }
+
+    /// Save all region synapses to disk for persistence across restarts.
+    pub fn save(&self, base_dir: &std::path::Path) -> std::io::Result<()> {
+        let dir = base_dir.join("spiking_brain");
+        std::fs::create_dir_all(&dir)?;
+        for i in 0..self.network.num_regions() {
+            let region = self.network.region(i);
+            if let Some(synapses) = region.synapses() {
+                let region_dir = dir.join(region.name());
+                synapses.save_to_dir(&region_dir)?;
+                tracing::info!("Saved {} synapses for region '{}'", synapses.num_synapses(), region.name());
+            }
+        }
+        Ok(())
+    }
+
+    /// Try to load previously saved synaptic weights into existing regions.
+    /// Only loads weights/weight_refs/eligibilities/structural_scores — connectivity (col_idx, row_ptr, delays) stays as initialized.
+    /// Returns number of regions successfully loaded.
+    pub fn load(&mut self, base_dir: &std::path::Path) -> usize {
+        let dir = base_dir.join("spiking_brain");
+        if !dir.exists() { return 0; }
+        let mut loaded = 0;
+        for i in 0..self.network.num_regions() {
+            let region_name = self.network.region(i).name().to_string();
+            let region_dir = dir.join(&region_name);
+            let weights_path = region_dir.join("weights.bin");
+            if !weights_path.exists() { continue; }
+
+            // Read saved weights and apply to current synapses
+            if let Some(synapses) = self.network.region_mut(i).synapses_mut() {
+                match load_weights_into_csr(synapses, &region_dir) {
+                    Ok(()) => {
+                        tracing::info!("Loaded saved weights for region '{}' ({} synapses)", region_name, synapses.num_synapses());
+                        loaded += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load weights for region '{}': {}", region_name, e);
+                    }
+                }
+            }
+        }
+        loaded
+    }
+}
+
+/// Load saved weight arrays into an existing CSR.
+/// Only loads learnable fields (weights, weight_refs, eligibilities, structural_scores).
+/// Connectivity (row_ptr, col_idx, delays) is NOT loaded — it's regenerated each startup.
+/// If the saved synapse count doesn't match current, skip (topology changed).
+fn load_weights_into_csr(csr: &mut synapse::SynapseCSR, dir: &std::path::Path) -> std::io::Result<()> {
+    let saved_n = {
+        let meta = std::fs::read(dir.join("meta.bin"))?;
+        if meta.len() < 16 { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "meta too short")); }
+        u64::from_le_bytes(meta[8..16].try_into().unwrap()) as usize
+    };
+
+    if saved_n != csr.num_synapses() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("synapse count mismatch: saved={saved_n}, current={}", csr.num_synapses()),
+        ));
+    }
+
+    // Load weights (i16 = 2 bytes each)
+    let weight_bytes = std::fs::read(dir.join("weights.bin"))?;
+    if weight_bytes.len() == saved_n * 2 {
+        for i in 0..saved_n {
+            csr.weights[i] = i16::from_le_bytes(weight_bytes[i*2..i*2+2].try_into().unwrap());
+        }
+    }
+
+    // Load weight_refs
+    let ref_path = dir.join("weight_refs.bin");
+    if ref_path.exists() {
+        let ref_bytes = std::fs::read(&ref_path)?;
+        if ref_bytes.len() == saved_n * 2 {
+            for i in 0..saved_n {
+                csr.weight_refs[i] = i16::from_le_bytes(ref_bytes[i*2..i*2+2].try_into().unwrap());
+            }
+        }
+    }
+
+    // Load eligibilities
+    let elig_path = dir.join("eligibilities.bin");
+    if elig_path.exists() {
+        let elig_bytes = std::fs::read(&elig_path)?;
+        if elig_bytes.len() == saved_n * 2 {
+            for i in 0..saved_n {
+                csr.eligibilities[i] = i16::from_le_bytes(elig_bytes[i*2..i*2+2].try_into().unwrap());
+            }
+        }
+    }
+
+    // Load structural scores
+    let struct_path = dir.join("structural_scores.bin");
+    if struct_path.exists() {
+        let struct_bytes = std::fs::read(&struct_path)?;
+        if struct_bytes.len() == saved_n {
+            csr.structural_scores.copy_from_slice(&struct_bytes);
+        }
+    }
+
+    Ok(())
 }

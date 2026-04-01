@@ -131,6 +131,17 @@ async fn run_cycle(brain: &BrainState) {
         }
     }
 
+    // ── Step 3c: Save spiking brain weights (every 5th cycle) ──
+    if cycle % 5 == 0 && cycle > 0 {
+        if let Some(ref sb) = brain.spiking_brain {
+            let sb = sb.lock().unwrap();
+            let save_dir = brain.config.project_root.join("outputs/cortex");
+            if let Err(e) = sb.save(&save_dir) {
+                tracing::warn!("Failed to save spiking brain: {e}");
+            }
+        }
+    }
+
     // ── Step 4: Knowledge enrichment — ConceptNet + Wikipedia ──
     let categories = get_curious_categories(brain, 5);
     let mut kg_added = 0;
