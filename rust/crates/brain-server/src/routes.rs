@@ -2561,22 +2561,14 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     } else { (vec![], vec![], vec![]) };
 
     // ── 2b. Feed spiking brain ─────────────────────────────────────
+    // Read neuromodulator levels (fast), then fire-and-forget the heavy spike simulation.
     let spiking_ctx = if let Some(ref sb) = brain.spiking_brain {
-        // Encode message text into spiking substrate
         let text_emb = brain.text_encoder.as_ref()
             .and_then(|te| te.encode(&message).ok());
 
-        if let Some(emb) = text_emb {
+        // Read modulator levels and update emotion (fast — no spike simulation)
+        let tone = {
             let mut sb = sb.lock().unwrap();
-
-            // Feed text embedding as visual input (text is a "modality")
-            let enc_dim = sb.visual_encoder.dim();
-            let truncated: Vec<f32> = emb.iter().take(enc_dim).copied().collect();
-            if truncated.len() == enc_dim {
-                sb.process_visual(&truncated);
-            }
-
-            // Feed emotion into neuromodulators
             match detected_emotion {
                 "happy" => { sb.reward(0.5); }
                 "sad" | "pain" => { sb.network.modulators.arousal(0.3); }
@@ -2584,36 +2576,38 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
                 "confused" => { sb.novelty(0.5); }
                 _ => {}
             }
-
-            // Derive personality tone from neuromodulator levels
             let mods = &sb.network.modulators;
             let mut tone_parts = Vec::new();
-
-            // High dopamine → warmer, more enthusiastic
             if mods.dopamine > 1.3 {
                 tone_parts.push("You feel warmth and connection right now — be especially encouraging and enthusiastic.");
             }
-            // High norepinephrine → calmer, more reassuring (compensate for the arousal)
             if mods.norepinephrine > 1.3 {
                 tone_parts.push("The person seems distressed — speak slowly, calmly, and be deeply reassuring. Prioritize comfort.");
             }
-            // High acetylcholine → curious, engaging
             if mods.acetylcholine > 1.3 {
                 tone_parts.push("Something novel just came up — show genuine curiosity and ask a follow-up question.");
             }
-            // Low serotonin → gentler, more empathetic
             if mods.serotonin < 0.7 {
                 tone_parts.push("The person has been feeling low for a while — be extra gentle and empathetic. Validate their feelings.");
             }
+            if tone_parts.is_empty() { None } else { Some(tone_parts.join(" ")) }
+            // MutexGuard drops here
+        };
 
-            if tone_parts.is_empty() {
-                None // baseline: no override needed
-            } else {
-                Some(tone_parts.join(" "))
-            }
-        } else {
-            None
+        // Fire-and-forget: feed embedding into spiking brain in background
+        if let Some(emb) = text_emb {
+            let sb_clone = std::sync::Arc::clone(brain.spiking_brain.as_ref().unwrap());
+            tokio::task::spawn_blocking(move || {
+                let mut sb = sb_clone.lock().unwrap();
+                let enc_dim = sb.visual_encoder.dim();
+                let truncated: Vec<f32> = emb.iter().take(enc_dim).copied().collect();
+                if truncated.len() == enc_dim {
+                    sb.process_visual(&truncated);
+                }
+            });
         }
+
+        tone
     } else {
         None
     };

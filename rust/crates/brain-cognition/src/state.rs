@@ -31,7 +31,7 @@ pub struct BrainState {
     pub clip_encoder: Option<brain_inference::CLIPEncoder>,
     pub audio_encoder: Option<brain_inference::WhisperEncoder>,
     pub companion_decoder: Option<brain_inference::CompanionDecoder>,
-    pub spiking_brain: Option<std::sync::Mutex<brain_spiking::SpikingBrain>>,
+    pub spiking_brain: Option<std::sync::Arc<std::sync::Mutex<brain_spiking::SpikingBrain>>>,
     pub emotion_table: Vec<[f32; 512]>,
     pub online_pairs: std::sync::Mutex<Vec<(Vec<f32>, Vec<f32>)>>,
     pub online_learning_count: std::sync::atomic::AtomicI64,
@@ -151,7 +151,7 @@ impl BrainState {
                 if loaded > 0 {
                     tracing::info!("Restored saved weights for {loaded} spiking brain regions");
                 }
-                Some(std::sync::Mutex::new(sb))
+                Some(std::sync::Arc::new(std::sync::Mutex::new(sb)))
             } else {
                 None
             }
