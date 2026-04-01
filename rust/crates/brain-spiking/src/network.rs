@@ -1,5 +1,6 @@
 use crate::config::RegionConfig;
 use crate::neuromodulation::Neuromodulators;
+use crate::plasticity;
 use crate::region::BrainRegion;
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +111,22 @@ impl SpikingNetwork {
             if fired[link.src_region].contains(&(link.src_neuron as usize)) {
                 self.regions[link.tgt_region]
                     .inject_current(link.tgt_neuron as usize, link.weight);
+            }
+        }
+
+        // Apply three-factor learning every 100 steps
+        // dw = lr * eligibility * neuromodulator
+        if self.step_count % 100 == 0 {
+            let modulator = self.modulators.learning_modulator();
+            for region in &mut self.regions {
+                if let Some(synapses) = region.synapses_mut() {
+                    plasticity::apply_three_factor(
+                        &mut synapses.weights,
+                        &synapses.eligibilities,
+                        0.001, // learning rate
+                        modulator,
+                    );
+                }
             }
         }
 

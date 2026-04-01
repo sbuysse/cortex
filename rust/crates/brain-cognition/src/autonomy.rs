@@ -117,6 +117,20 @@ async fn run_cycle(brain: &BrainState) {
         consolidate_memory(brain, cycle);
     }
 
+    // ── Step 3b: Spiking brain sleep consolidation (every 5th cycle) ──
+    if cycle % 5 == 0 && cycle > 0 {
+        if let Some(ref sb) = brain.spiking_brain {
+            let mut sb = sb.lock().unwrap();
+            tracing::info!("Spiking brain sleep cycle starting");
+            brain_spiking::sleep::sleep_cycle(&mut sb.network, 500);
+            let stats = sb.stats();
+            tracing::info!(
+                "Spiking brain sleep complete — {} neurons, {} synapses, {} last_spikes",
+                stats.total_neurons, stats.total_synapses, stats.total_spikes_last_step
+            );
+        }
+    }
+
     // ── Step 4: Knowledge enrichment — ConceptNet + Wikipedia ──
     let categories = get_curious_categories(brain, 5);
     let mut kg_added = 0;
