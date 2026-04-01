@@ -20,6 +20,7 @@ fn build_router(state: Arc<AppState>, static_dir: Option<&Path>) -> Router {
         .route("/face", get(routes::face))
         .route("/explore", get(routes::explore))
         .route("/training", get(routes::training))
+        .route("/spiking", get(routes::spiking_page))
         // Old URLs — kept for backward compat (render same pages)
         .route("/evolution", get(routes::training))
         .route("/experiments", get(routes::training))
@@ -118,6 +119,8 @@ fn build_router(state: Arc<AppState>, static_dir: Option<&Path>) -> Router {
         .route("/api/companion/greeting", get(routes::api_companion_greeting))
         .route("/api/companion/safety", get(routes::api_companion_safety))
         .route("/api/companion/personal", get(routes::api_companion_personal))
+        // Spiking brain status
+        .route("/api/brain/spiking/status", get(routes::api_brain_spiking_status))
         // Brain Voice API (catch-all proxy)
         .route("/api/brain/{endpoint}", post(routes::api_brain_proxy))
         .route("/api/brain/chat/{session_id}", delete(routes::api_brain_chat_delete))

@@ -2578,6 +2578,14 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     }
     let brain_ctx = brain_ctx_parts.join("; ");
 
+    // Emit spiking brain activity via SSE
+    if let Some(ref sc) = spiking_ctx {
+        brain.sse.emit("spiking_activity", serde_json::json!({
+            "context": sc,
+            "emotion": detected_emotion,
+        }));
+    }
+
     // ── 3. Ollama primary path (qwen2.5:1.5b on-device) ─────────────────
     // HOPE decoder is kept as last-resort fallback inside the warm-fallback block.
     let used_native = false;
@@ -3860,4 +3868,61 @@ pub async fn api_live_experiment(
 ) -> impl IntoResponse {
     let rx = state.live_tx.subscribe();
     crate::sse::experiment_sse_stream(rx, experiment_id)
+}
+
+// ── Spiking brain endpoints ─────────────────────────────────────
+
+/// Spiking brain visualization page.
+pub async fn spiking_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut ctx = tera::Context::new();
+    ctx.insert("page", "spiking");
+    match state.templates.render("spiking.html", &ctx) {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => Html(format!("Template error: {e:?}")).into_response(),
+    }
+}
+
+/// Spiking brain status — per-region stats, neuromodulator levels.
+pub async fn api_brain_spiking_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Some(brain) = &state.brain {
+        if let Some(ref sb) = brain.spiking_brain {
+            let sb = sb.lock().unwrap();
+            let stats = sb.stats();
+            let mods = &sb.network.modulators;
+
+            let mut regions = Vec::new();
+            for i in 0..sb.network.num_regions() {
+                let region = sb.network.region(i);
+                let synapses = region.synapses().map(|s| s.num_synapses()).unwrap_or(0);
+                regions.push(serde_json::json!({
+                    "id": i,
+                    "name": region.name(),
+                    "neurons": region.num_neurons(),
+                    "synapses": synapses,
+                    "spikes": region.last_spikes().len(),
+                    "spike_rate": if region.num_neurons() > 0 {
+                        region.last_spikes().len() as f64 / region.num_neurons() as f64
+                    } else { 0.0 },
+                }));
+            }
+
+            return Json(serde_json::json!({
+                "active": true,
+                "total_neurons": stats.total_neurons,
+                "total_synapses": stats.total_synapses,
+                "total_spikes": stats.total_spikes_last_step,
+                "num_regions": stats.num_regions,
+                "regions": regions,
+                "neuromodulators": {
+                    "dopamine": mods.dopamine,
+                    "acetylcholine": mods.acetylcholine,
+                    "norepinephrine": mods.norepinephrine,
+                    "serotonin": mods.serotonin,
+                },
+                "learning_modulator": mods.learning_modulator(),
+                "gain_modulator": mods.gain_modulator(),
+            })).into_response();
+        }
+    }
+    Json(serde_json::json!({"active": false})).into_response()
 }
