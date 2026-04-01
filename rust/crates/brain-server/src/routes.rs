@@ -3181,6 +3181,16 @@ async fn try_native_listen(brain: &brain_cognition::BrainState, body: &serde_jso
         a_emb.clone(),  // full 512-dim audio
     ));
 
+    // Feed audio embedding into spiking brain auditory cortex
+    if let Some(ref sb) = brain.spiking_brain {
+        let mut sb = sb.lock().unwrap();
+        let enc_dim = sb.audio_encoder.dim();
+        let truncated: Vec<f32> = a_emb.iter().take(enc_dim).copied().collect();
+        if truncated.len() == enc_dim {
+            sb.process_audio(&truncated);
+        }
+    }
+
     // SSE
     brain.sse.emit("perception", serde_json::json!({
         "modality": "audio", "labels": top_labels, "confidence": confidence,
