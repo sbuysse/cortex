@@ -476,50 +476,68 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
 
     tracing::info!("Academic learn: got {} chars of transcript", transcript.len());
 
-    // 4. Extract key concepts via Ollama
+    // 4. Extract key concepts via Ollama (use 3b for reliable JSON)
     let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
-    let model = std::env::var("COMPANION_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b".into());
+    let extract_model = std::env::var("EXTRACT_MODEL").unwrap_or_else(|_| "qwen2.5:3b".into());
 
-    // Truncate transcript to fit in context
     let truncated_transcript: String = transcript.chars().take(2000).collect();
     let extract_prompt = format!(
         "Extract the 10 most important concepts or facts from this transcript. \
-         Return ONLY a JSON array of strings, nothing else.\n\n\
+         Return a JSON object with a \"concepts\" key containing an array of strings.\n\n\
          Transcript: {truncated_transcript}"
     );
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(120))
         .build().map_err(|e| e.to_string())?;
 
     let concepts: Vec<String> = match client
         .post(format!("{ollama_url}/api/generate"))
         .json(&serde_json::json!({
-            "model": model,
+            "model": extract_model,
             "prompt": extract_prompt,
             "stream": false,
+            "format": "json",
             "options": {"temperature": 0.3, "num_predict": 500}
         }))
         .send().await
     {
         Ok(resp) => {
             if let Ok(body) = resp.json::<serde_json::Value>().await {
-                let text = body["response"].as_str().unwrap_or("[]");
-                // Try to parse JSON array from response
-                serde_json::from_str::<Vec<String>>(text.trim())
-                    .or_else(|_| {
-                        // Try to find JSON array in the response
-                        if let Some(start) = text.find('[') {
-                            if let Some(end) = text.rfind(']') {
-                                return serde_json::from_str(&text[start..=end]);
+                let text = body["response"].as_str().unwrap_or("{}");
+                tracing::info!("Academic learn: Ollama response (first 300): {}", &text[..text.len().min(300)]);
+                // Parse as JSON object with "concepts" key
+                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(text) {
+                    if let Some(arr) = obj.get("concepts").and_then(|v| v.as_array()) {
+                        arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                    } else if let Some(arr) = obj.as_array() {
+                        // Direct array fallback
+                        arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                    } else {
+                        // Try all string values from any object structure
+                        let mut result = Vec::new();
+                        if let Some(map) = obj.as_object() {
+                            for v in map.values() {
+                                if let Some(s) = v.as_str() {
+                                    result.push(s.to_string());
+                                } else if let Some(arr) = v.as_array() {
+                                    for item in arr {
+                                        if let Some(s) = item.as_str() {
+                                            result.push(s.to_string());
+                                        }
+                                    }
+                                }
                             }
                         }
-                        Ok(vec![])
-                    })
-                    .unwrap_or_default()
+                        result
+                    }
+                } else { vec![] }
             } else { vec![] }
         }
-        Err(_) => vec![],
+        Err(e) => {
+            tracing::warn!("Academic learn: Ollama call failed: {e}");
+            vec![]
+        }
     };
 
     if concepts.is_empty() {
