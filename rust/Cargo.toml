@@ -8,6 +8,7 @@ members = [
     "crates/brain-inference",
     "crates/brain-cognition",
     "crates/mutation-template",
+    "crates/brain-spiking",
 ]
 resolver = "2"
 

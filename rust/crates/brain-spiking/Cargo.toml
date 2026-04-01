@@ -1,0 +1,16 @@
+[package]
+name = "brain-spiking"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rayon = "1.10"
+crossbeam = "0.8"
+bitvec = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+bincode = "1"
+
+[dev-dependencies]
