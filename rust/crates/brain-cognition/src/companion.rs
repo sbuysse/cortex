@@ -88,10 +88,11 @@ fn build_system_prompt_with_context(mem: &PersonalMemory, current_emotion: &str,
     let mood_trend = personal::get_mood_trend(mem, 4.0).unwrap_or_else(|| "neutral".into());
     let period = get_period();
 
+    // Brain context may contain perceptual grounding AND/OR personality tone directives
     let brain_note = if brain_ctx.is_empty() {
         String::new()
     } else {
-        format!("\n\nMy perceptual associations: {brain_ctx}")
+        format!("\n\nInternal state: {brain_ctx}")
     };
 
     format!(

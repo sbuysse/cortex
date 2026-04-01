@@ -2549,15 +2549,32 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
                 _ => {}
             }
 
-            // Read brain state for LLM context
-            let stats = sb.stats();
+            // Derive personality tone from neuromodulator levels
             let mods = &sb.network.modulators;
-            Some(format!(
-                "spiking brain: {} neurons across {} regions, {} active spikes; \
-                 neuromodulators: dopamine={:.2} acetylcholine={:.2} norepinephrine={:.2} serotonin={:.2}",
-                stats.total_neurons, stats.num_regions, stats.total_spikes_last_step,
-                mods.dopamine, mods.acetylcholine, mods.norepinephrine, mods.serotonin
-            ))
+            let mut tone_parts = Vec::new();
+
+            // High dopamine → warmer, more enthusiastic
+            if mods.dopamine > 1.3 {
+                tone_parts.push("You feel warmth and connection right now — be especially encouraging and enthusiastic.");
+            }
+            // High norepinephrine → calmer, more reassuring (compensate for the arousal)
+            if mods.norepinephrine > 1.3 {
+                tone_parts.push("The person seems distressed — speak slowly, calmly, and be deeply reassuring. Prioritize comfort.");
+            }
+            // High acetylcholine → curious, engaging
+            if mods.acetylcholine > 1.3 {
+                tone_parts.push("Something novel just came up — show genuine curiosity and ask a follow-up question.");
+            }
+            // Low serotonin → gentler, more empathetic
+            if mods.serotonin < 0.7 {
+                tone_parts.push("The person has been feeling low for a while — be extra gentle and empathetic. Validate their feelings.");
+            }
+
+            if tone_parts.is_empty() {
+                None // baseline: no override needed
+            } else {
+                Some(tone_parts.join(" "))
+            }
         } else {
             None
         }
