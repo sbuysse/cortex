@@ -152,7 +152,7 @@ impl SynapseCSR {
         // Synaptic scaling: cap total input to prevent cascade while allowing propagation.
         // Allow up to MAX_DRIVE of net current per neuron. Anything beyond is clipped.
         // This is homeostatic — a neuron receiving 1000 inputs behaves like one receiving 10.
-        const MAX_DRIVE: f32 = 2.0; // enough to fire (threshold=1.0) but not overwhelm
+        const MAX_DRIVE: f32 = 0.5; // below threshold — requires multiple correlated inputs to fire
         for (i, &count) in input_count.iter().enumerate() {
             if count > 0 {
                 current_buf[i] = current_buf[i].clamp(-MAX_DRIVE, MAX_DRIVE);
