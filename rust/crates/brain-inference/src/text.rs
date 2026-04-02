@@ -171,6 +171,24 @@ impl TextEncoder {
         }).collect())
     }
 
+    /// Semantic search with a pre-computed embedding (384-dim).
+    pub fn semantic_search_embedding(&self, query_emb: &[f32], top_k: usize) -> Result<Vec<(String, f32)>, Box<dyn std::error::Error>> {
+        let (embs, labels) = match (&self.label_embeddings, &self.labels) {
+            (Some(e), Some(l)) => (e, l),
+            _ => return Ok(Vec::new()),
+        };
+
+        let mut scored: Vec<(usize, f32)> = embs.iter().enumerate().map(|(i, emb)| {
+            let sim: f32 = query_emb.iter().zip(emb).map(|(a, b)| a * b).sum();
+            (i, sim)
+        }).collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        Ok(scored.into_iter().take(top_k).map(|(i, sim)| {
+            (labels[i].clone(), (sim * 10000.0).round() / 10000.0)
+        }).collect())
+    }
+
     pub fn has_labels(&self) -> bool { self.labels.is_some() }
     pub fn label_count(&self) -> usize { self.labels.as_ref().map(|l| l.len()).unwrap_or(0) }
 }

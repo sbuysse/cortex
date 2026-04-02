@@ -2585,18 +2585,16 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         // Read snapshot from SEPARATE mutex — never contends with tick thread
         let snapshot = brain.spiking_snapshot.lock().unwrap().clone();
 
-        // Match snapshot's association embedding against codebook
+        // Match brain's association embedding against TEXT concepts (not audio codebook).
+        // Uses MiniLM semantic search which includes novel concepts learned from videos.
         let assoc_concepts: Vec<String> = if snapshot.has_data {
-            if let Some(mlp) = &brain.inference {
-                let projected = mlp.project_visual(&snapshot.last_association_embedding);
-                let cb_guard = brain.codebook.lock().unwrap();
-                if let Some(cb) = cb_guard.as_ref() {
-                    cb.nearest(&projected, 5)
-                        .iter()
-                        .filter(|(_, sim)| *sim > 0.15)
-                        .map(|(label, _)| label.clone())
-                        .collect()
-                } else { vec![] }
+            if let Some(te) = &brain.text_encoder {
+                te.semantic_search_embedding(&snapshot.last_association_embedding, 5)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(_, sim)| *sim > 0.15)
+                    .map(|(label, _)| label)
+                    .collect()
             } else { vec![] }
         } else { vec![] };
 

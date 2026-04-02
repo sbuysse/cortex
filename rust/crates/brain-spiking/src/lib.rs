@@ -171,41 +171,46 @@ impl SpikingBrain {
             self.network.step();
         }
 
-        // Phase 2: Free propagation — NO new input, let learned connections activate
-        // This is where association happens: the stimulus echoes through 2B connections
-        // Keep steps low to stay responsive — associations form in the first few steps
+        // Phase 2: Free propagation — NO new input, let learned connections activate.
+        // Read from DOWNSTREAM regions (PFC, hippocampus) — not the input regions.
+        // Whatever fires in PFC/hippocampus is pure association, not echo.
         let propagation_steps = 10;
-        let mut region_spike_counts: Vec<(String, usize)> = Vec::new();
-
-        // Track spikes during propagation per region
         let num_regions = self.network.num_regions();
         let mut per_region_total = vec![0usize; num_regions];
 
-        // Reset decoder for clean readout
-        self.decoder.reset();
+        // Decoders for downstream regions (384-dim each, reading first 384 neurons)
+        let pfc_region = if is_full { regions::full_brain::PREFRONTAL } else { 0 };
+        let hippo_region = if is_full { regions::full_brain::HIPPOCAMPUS } else { 0 };
+        let mut pfc_decoder = RateDecoder::new(384, propagation_steps);
+        let mut hippo_decoder = RateDecoder::new(384, propagation_steps);
+        self.decoder.reset(); // also reset association decoder
 
         for _ in 0..propagation_steps {
             self.network.step();
-            // Record spikes from first 384 neurons of association cortex (matches input dim)
-            for &idx in self.network.region(assoc_region).last_spikes() {
-                if idx < 384 {
-                    self.decoder.record_spike(idx, 0);
-                }
+            // Read PFC output (downstream — pure association)
+            for &idx in self.network.region(pfc_region).last_spikes() {
+                if idx < 384 { pfc_decoder.record_spike(idx, 0); }
             }
-            // Count spikes per region
+            // Read hippocampus output (memory recall)
+            for &idx in self.network.region(hippo_region).last_spikes() {
+                if idx < 384 { hippo_decoder.record_spike(idx, 0); }
+            }
+            // Count all regions
             for r in 0..num_regions {
                 per_region_total[r] += self.network.region(r).last_spikes().len();
             }
         }
 
-        // Collect region activity
-        for r in 0..num_regions {
-            let name = self.network.region(r).name().to_string();
-            region_spike_counts.push((name, per_region_total[r]));
-        }
+        let region_spike_counts: Vec<(String, usize)> = (0..num_regions)
+            .map(|r| (self.network.region(r).name().to_string(), per_region_total[r]))
+            .collect();
 
-        // Decode the association cortex output
-        let output_embedding = self.decoder.decode();
+        // Combine PFC + hippocampus decodings (average the two downstream readouts)
+        let pfc_emb = pfc_decoder.decode();
+        let hippo_emb = hippo_decoder.decode();
+        let output_embedding: Vec<f32> = pfc_emb.iter().zip(hippo_emb.iter())
+            .map(|(p, h)| (p + h) / 2.0)
+            .collect();
 
         AssociativeRecall {
             region_activity: region_spike_counts,
