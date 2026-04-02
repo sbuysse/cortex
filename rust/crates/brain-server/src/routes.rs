@@ -770,14 +770,10 @@ fn try_native_watch(brain: &brain_cognition::BrainState, image_b64: &str, top_k:
     // Buffer learning pair: raw visual (384-dim) + world model predicted audio
     brain.online_pairs.lock().unwrap().push((v_emb.clone(), v_proj.clone()));
 
-    // Feed visual embedding into spiking brain visual cortex
+    // Enqueue visual embedding for spiking brain (non-blocking)
     if let Some(ref sb) = brain.spiking_brain {
         let mut sb = sb.lock().unwrap();
-        let enc_dim = sb.visual_encoder.dim();
-        let truncated: Vec<f32> = v_emb.iter().take(enc_dim).copied().collect();
-        if truncated.len() == enc_dim {
-            sb.process_visual(&truncated);
-        }
+        sb.enqueue_query(v_emb.clone());
     }
 
     // SSE
@@ -3234,14 +3230,10 @@ async fn try_native_listen(brain: &brain_cognition::BrainState, body: &serde_jso
         a_emb.clone(),  // full 512-dim audio
     ));
 
-    // Feed audio embedding into spiking brain auditory cortex
+    // Enqueue audio embedding for spiking brain (non-blocking)
     if let Some(ref sb) = brain.spiking_brain {
         let mut sb = sb.lock().unwrap();
-        let enc_dim = sb.audio_encoder.dim();
-        let truncated: Vec<f32> = a_emb.iter().take(enc_dim).copied().collect();
-        if truncated.len() == enc_dim {
-            sb.process_audio(&truncated);
-        }
+        sb.enqueue_query(a_emb.clone());
     }
 
     // SSE

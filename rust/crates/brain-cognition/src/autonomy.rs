@@ -569,15 +569,11 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
         if let Ok(t_emb) = te.encode(concept) {
             let t_proj = mlp.project_visual(&t_emb);
 
-            // Feed into spiking brain
+            // Enqueue for spiking brain (non-blocking — tick thread processes)
             if let Some(ref sb) = brain.spiking_brain {
                 let mut sb = sb.lock().unwrap();
-                let enc_dim = sb.visual_encoder.dim();
-                let truncated: Vec<f32> = t_emb.iter().take(enc_dim).copied().collect();
-                if truncated.len() == enc_dim {
-                    sb.process_visual(&truncated);
-                    sb.novelty(0.3);
-                }
+                sb.enqueue_query(t_emb.clone());
+                sb.novelty(0.3);
             }
 
             // Store KG edges: topic → has-concept → concept
