@@ -132,7 +132,12 @@ impl SynapseCSR {
     }
 
     /// Deliver spikes: for each fired neuron, add weighted current to targets.
+    /// Applies synaptic scaling: normalizes total input per target neuron to prevent
+    /// activity cascades. Without this, 1000 excitatory inputs overwhelm inhibition.
     pub fn deliver_spikes(&self, fired: &[usize], current_buf: &mut [f32]) {
+        // Count inputs per target for normalization
+        let mut input_count = vec![0u16; current_buf.len()];
+
         for &src in fired {
             let start = self.row_ptr[src] as usize;
             let end = self.row_ptr[src + 1] as usize;
@@ -140,6 +145,16 @@ impl SynapseCSR {
                 let tgt = self.col_idx[i] as usize;
                 let w = weight_from_i16(self.weights[i]);
                 current_buf[tgt] += w;
+                input_count[tgt] += 1;
+            }
+        }
+
+        // Synaptic scaling: normalize by sqrt(input_count) to prevent cascade.
+        // Single input = full weight. 100 inputs = each contributes 1/10th.
+        // This is biologically plausible (homeostatic synaptic scaling).
+        for (i, &count) in input_count.iter().enumerate() {
+            if count > 1 {
+                current_buf[i] /= (count as f32).sqrt();
             }
         }
     }
