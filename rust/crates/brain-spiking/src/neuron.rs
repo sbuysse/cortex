@@ -95,17 +95,36 @@ impl NeuronArray {
         let p = &self.params;
 
         for i in 0..self.n {
+            // Skip quiescent neurons (no input, at rest, no adaptation)
+            // This is the key optimization: at ~1% firing rate, 99% of neurons are skipped
+            if self.i_ext[i] == 0.0 && self.v[i] == p.v_rest && self.a[i] == 0.0 {
+                continue;
+            }
             self.v[i] = self.v[i] * p.v_decay + self.i_ext[i] - self.a[i];
             if self.v[i] >= p.v_threshold {
                 spikes.set(i);
                 self.v[i] = p.v_reset;
                 self.a[i] += p.a_increment;
             }
+            // Decay adaptation; snap to zero if negligible
             self.a[i] *= p.a_decay;
+            if self.a[i].abs() < 1e-6 { self.a[i] = 0.0; }
+            // Snap voltage to rest if negligible
+            if self.v[i].abs() < 1e-6 { self.v[i] = p.v_rest; }
         }
 
+        // Clear input currents — use memset-like operation
+        // SAFETY: this is a Vec<f32>, fill(0.0) compiles to memset
         self.i_ext.fill(0.0);
         spikes
+    }
+
+    /// Batch zero-check: count how many neurons are quiescent.
+    /// Useful for monitoring sparsity.
+    pub fn count_active(&self) -> usize {
+        self.v.iter().zip(self.i_ext.iter()).zip(self.a.iter())
+            .filter(|((v, i), a)| **v != self.params.v_rest || **i != 0.0 || **a != 0.0)
+            .count()
     }
 
     pub fn reset(&mut self) {

@@ -179,30 +179,49 @@ impl SpikingBrain {
         // Phase 2: Free propagation — NO new input, let learned connections activate.
         // Read from DOWNSTREAM regions (PFC, hippocampus) — not the input regions.
         // Whatever fires in PFC/hippocampus is pure association, not echo.
-        let propagation_steps = 10;
+        // Early stopping: stop when no new spikes (activity settled).
+        let max_propagation_steps = 30;
         let num_regions = self.network.num_regions();
         let mut per_region_total = vec![0usize; num_regions];
 
         // Decoders for downstream regions (384-dim each, reading first 384 neurons)
         let pfc_region = if is_full { regions::full_brain::PREFRONTAL } else { 0 };
         let hippo_region = if is_full { regions::full_brain::HIPPOCAMPUS } else { 0 };
-        let mut pfc_decoder = RateDecoder::new(384, propagation_steps);
-        let mut hippo_decoder = RateDecoder::new(384, propagation_steps);
-        self.decoder.reset(); // also reset association decoder
+        let mut pfc_decoder = RateDecoder::new(384, max_propagation_steps);
+        let mut hippo_decoder = RateDecoder::new(384, max_propagation_steps);
+        self.decoder.reset();
 
-        for _ in 0..propagation_steps {
+        let mut actual_steps = 0;
+        let mut consecutive_silent = 0;
+
+        for _ in 0..max_propagation_steps {
             self.network.step();
+            actual_steps += 1;
+
+            let mut step_spikes = 0;
             // Read PFC output (downstream — pure association)
             for &idx in self.network.region(pfc_region).last_spikes() {
                 if idx < 384 { pfc_decoder.record_spike(idx, 0); }
+                step_spikes += 1;
             }
             // Read hippocampus output (memory recall)
             for &idx in self.network.region(hippo_region).last_spikes() {
                 if idx < 384 { hippo_decoder.record_spike(idx, 0); }
+                step_spikes += 1;
             }
             // Count all regions
             for r in 0..num_regions {
-                per_region_total[r] += self.network.region(r).last_spikes().len();
+                let n = self.network.region(r).last_spikes().len();
+                per_region_total[r] += n;
+                step_spikes += n;
+            }
+
+            // Early stopping: if no spikes for 3 consecutive steps, activity has settled
+            if step_spikes == 0 {
+                consecutive_silent += 1;
+                if consecutive_silent >= 3 { break; }
+            } else {
+                consecutive_silent = 0;
             }
         }
 
@@ -220,7 +239,7 @@ impl SpikingBrain {
         AssociativeRecall {
             region_activity: region_spike_counts,
             output_embedding,
-            propagation_steps,
+            propagation_steps: actual_steps,
         }
     }
 
