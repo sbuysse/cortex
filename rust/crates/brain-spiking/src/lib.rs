@@ -53,10 +53,8 @@ pub struct SpikingBrain {
     pub snapshot: BrainSnapshot,
     /// Pending query embedding to process (set by dialogue, consumed by background tick).
     pending_query: Option<Vec<f32>>,
-    // No concept storage. The STDP-modified synaptic weights ARE the memory.
-    // learn_concept() strengthens pathways. associate() recalls through spike propagation.
-    // The decoded PFC+hippo embedding IS the brain's output — matched against
-    // the text encoder's label database (pre-existing, not stored during learning).
+    /// Queue of embeddings to learn (5 STDP repetitions each, processed by tick thread).
+    learn_queue: Vec<Vec<f32>>,
 }
 
 impl SpikingBrain {
@@ -79,7 +77,7 @@ impl SpikingBrain {
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
-            // No concept storage — STDP weights are the memory
+            learn_queue: Vec::new(),
         }
     }
 
@@ -95,7 +93,7 @@ impl SpikingBrain {
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
-            // No concept storage — STDP weights are the memory
+            learn_queue: Vec::new(),
         }
     }
 
@@ -137,12 +135,16 @@ impl SpikingBrain {
     pub fn reward(&mut self, magnitude: f32) { self.network.modulators.reward(magnitude); }
     pub fn novelty(&mut self, magnitude: f32) { self.network.modulators.novelty(magnitude); }
 
-    /// Learn a concept: run it through the brain multiple times to strengthen
-    /// STDP pathways. Stores NOTHING — the modified synaptic weights ARE the memory.
-    /// On recall, the same stimulus will activate the same (now-strengthened) pathways.
-    pub fn learn_concept(&mut self, _label: &str, embedding: &[f32]) {
-        // 5 repetitions — each pass strengthens STDP connections along the pathway.
-        // After 5 passes, the synaptic weights encode this concept's association pattern.
+    /// Enqueue a concept for learning. The tick thread will run it through
+    /// the brain multiple times to strengthen STDP pathways.
+    /// Stores NOTHING — the modified synaptic weights ARE the memory.
+    pub fn enqueue_learn(&mut self, embedding: Vec<f32>) {
+        self.learn_queue.push(embedding);
+    }
+
+    /// Process one learning item: run it through 5 STDP repetitions.
+    /// Called by the tick thread, not the request thread.
+    fn learn_one(&mut self, embedding: &[f32]) {
         for _ in 0..5 {
             self.associate(embedding);
         }
@@ -167,6 +169,12 @@ impl SpikingBrain {
     /// Background tick — called periodically from a background thread.
     /// Processes pending queries and updates the snapshot.
     pub fn tick(&mut self) {
+        // Process one learning item (if any) — 5 STDP repetitions
+        if let Some(emb) = self.learn_queue.pop() {
+            self.learn_one(&emb);
+            return; // one item per tick to avoid blocking
+        }
+        // Process pending query (recall)
         if let Some(emb) = self.pending_query.take() {
             let recall = self.associate(&emb);
             self.snapshot = BrainSnapshot {
@@ -176,6 +184,11 @@ impl SpikingBrain {
                 has_data: true,
             };
         }
+    }
+
+    /// Check if there's pending work (learn or query).
+    pub fn has_pending_work(&self) -> bool {
+        self.pending_query.is_some() || !self.learn_queue.is_empty()
     }
 
     /// Associative recall: encode a query, let activity propagate through

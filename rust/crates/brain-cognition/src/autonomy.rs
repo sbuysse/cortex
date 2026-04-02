@@ -596,11 +596,11 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
         if let Ok(t_emb) = te.encode(concept) {
             let t_proj = mlp.project_visual(&t_emb);
 
-            // Only learn NOVEL concepts (from transcript, not audio codebook)
+            // Enqueue novel concepts for STDP learning (tick thread processes)
             if novel_labels.contains(concept) {
                 if let Some(ref sb) = brain.spiking_brain {
                     if let Ok(mut sb) = sb.try_lock() {
-                        sb.learn_concept(concept, &t_emb);
+                        sb.enqueue_learn(t_emb.clone());
                         sb.novelty(0.3);
                     }
                 }

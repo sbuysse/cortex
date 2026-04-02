@@ -174,7 +174,7 @@ impl BrainState {
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     let has_pending = {
                         let sb = sb_clone.lock().unwrap();
-                        sb.has_pending_query()
+                        sb.has_pending_work()
                     };
                     if has_pending {
                         let t0 = std::time::Instant::now();
