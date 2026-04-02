@@ -56,3 +56,4 @@ sweep_queue.json
 # Documentation (legacy, will be rewritten — keep API.md)
 docs/*
 !docs/API.md
+!docs/LESSONS.md
