@@ -2560,63 +2560,38 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         (related, fm_matches, kg_facts)
     } else { (vec![], vec![], vec![]) };
 
-    // ── 2b. Associative recall via spiking brain ──────────────────────
-    // Encode the query, let activity propagate through 2B learned connections,
-    // read out what the brain associates. Then match associations against codebook
-    // to get concept names the brain formed through STDP — not stored, not searched.
+    // ── 2b. Spiking brain: enqueue query + read latest associations ────
+    // Non-blocking: enqueue the query for background processing, read the
+    // snapshot from the PREVIOUS query's associative recall.
+    // The brain runs asynchronously — its associations reflect learned STDP
+    // connections, not stored data.
     let (spiking_ctx, associated_concepts) = if let Some(ref sb) = brain.spiking_brain {
         let text_emb = brain.text_encoder.as_ref()
             .and_then(|te| te.encode(&message).ok());
 
-        // Update neuromodulators from emotion (fast, no simulation)
-        {
-            let mut sb = sb.lock().unwrap();
-            match detected_emotion {
-                "happy" => { sb.reward(0.5); }
-                "sad" | "pain" => { sb.network.modulators.arousal(0.3); }
-                "fearful" => { sb.network.modulators.arousal(0.8); }
-                "confused" => { sb.novelty(0.5); }
-                _ => {}
-            }
+        let mut sb = sb.lock().unwrap();
+
+        // Update neuromodulators from emotion
+        match detected_emotion {
+            "happy" => { sb.reward(0.5); }
+            "sad" | "pain" => { sb.network.modulators.arousal(0.3); }
+            "fearful" => { sb.network.modulators.arousal(0.8); }
+            "confused" => { sb.novelty(0.5); }
+            _ => {}
         }
 
-        // Run associative recall in background thread (heavy: 70 timesteps through 2B connections)
-        let recall_result = if let Some(emb) = text_emb {
-            let sb_clone = std::sync::Arc::clone(brain.spiking_brain.as_ref().unwrap());
-            let emb_clone = emb.clone();
-            match tokio::task::spawn_blocking(move || {
-                let mut sb = sb_clone.lock().unwrap();
-                let enc_dim = sb.visual_encoder.dim();
-                if emb_clone.len() == enc_dim {
-                    let recall = sb.associate(&emb_clone);
-                    let total_spikes: usize = recall.region_activity.iter().map(|(_, c)| *c).sum();
-                    tracing::info!(
-                        "Associative recall: {} total spikes across {} regions, output_emb non-zero: {}",
-                        total_spikes,
-                        recall.region_activity.len(),
-                        recall.output_embedding.iter().any(|&v| v > 0.0)
-                    );
-                    Some(recall)
-                } else {
-                    tracing::warn!("Associative recall: embedding dim mismatch (enc_dim={enc_dim}, got={})", emb_clone.len());
-                    None
-                }
-            }).await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Associative recall spawn_blocking failed: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        // Enqueue this query for background associative recall
+        if let Some(emb) = text_emb {
+            sb.enqueue_query(emb);
+        }
 
-        if let Some(recall) = recall_result {
-            // Match the association cortex output embedding against the codebook
-            // These are concepts the BRAIN associates — formed by STDP, not stored
-            let assoc_concepts: Vec<String> = if let Some(mlp) = &brain.inference {
-                let projected = mlp.project_visual(&recall.output_embedding);
+        // Read the latest snapshot (from previous query's recall)
+        let snapshot = sb.get_snapshot().clone();
+
+        // Match snapshot's association embedding against codebook
+        let assoc_concepts: Vec<String> = if snapshot.has_data {
+            if let Some(mlp) = &brain.inference {
+                let projected = mlp.project_visual(&snapshot.last_association_embedding);
                 let cb_guard = brain.codebook.lock().unwrap();
                 if let Some(cb) = cb_guard.as_ref() {
                     cb.nearest(&projected, 5)
@@ -2625,50 +2600,46 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
                         .map(|(label, _)| label.clone())
                         .collect()
                 } else { vec![] }
-            } else { vec![] };
+            } else { vec![] }
+        } else { vec![] };
 
-            // Build personality tone from neuromodulator levels
-            let tone = {
-                let sb = brain.spiking_brain.as_ref().unwrap().lock().unwrap();
-                let mods = &sb.network.modulators;
-                let mut tone_parts = Vec::new();
-                if mods.dopamine > 1.3 {
-                    tone_parts.push("You feel warmth — be encouraging and enthusiastic.");
-                }
-                if mods.norepinephrine > 1.3 {
-                    tone_parts.push("The person seems distressed — be deeply reassuring.");
-                }
-                if mods.acetylcholine > 1.3 {
-                    tone_parts.push("Something novel — show curiosity, ask a follow-up.");
-                }
-                if mods.serotonin < 0.7 {
-                    tone_parts.push("They've been low — be extra gentle and empathetic.");
-                }
-
-                // Include active brain regions in context
-                let active_regions: Vec<String> = recall.region_activity.iter()
-                    .filter(|(_, count)| *count > 0)
-                    .map(|(name, count)| format!("{name}:{count}"))
-                    .collect();
-
-                let mut ctx = Vec::new();
-                if !assoc_concepts.is_empty() {
-                    ctx.push(format!("My brain associates this with: {}", assoc_concepts.join(", ")));
-                }
-                if !active_regions.is_empty() {
-                    ctx.push(format!("Active regions: {}", active_regions.join(", ")));
-                }
-                if !tone_parts.is_empty() {
-                    ctx.push(tone_parts.join(" "));
-                }
-
-                if ctx.is_empty() { None } else { Some(ctx.join(". ")) }
-            };
-
-            (tone, assoc_concepts)
-        } else {
-            (None, vec![])
+        // Build personality tone from neuromodulators
+        let mods = &sb.network.modulators;
+        let mut tone_parts = Vec::new();
+        if mods.dopamine > 1.3 {
+            tone_parts.push("You feel warmth — be encouraging and enthusiastic.");
         }
+        if mods.norepinephrine > 1.3 {
+            tone_parts.push("The person seems distressed — be deeply reassuring.");
+        }
+        if mods.acetylcholine > 1.3 {
+            tone_parts.push("Something novel — show curiosity, ask a follow-up.");
+        }
+        if mods.serotonin < 0.7 {
+            tone_parts.push("They've been low — be extra gentle and empathetic.");
+        }
+
+        let mut ctx = Vec::new();
+        if !assoc_concepts.is_empty() {
+            ctx.push(format!("My brain associates this with: {}", assoc_concepts.join(", ")));
+        }
+        if !snapshot.region_activity.is_empty() {
+            let active: Vec<String> = snapshot.region_activity.iter()
+                .filter(|(_, c)| *c > 0)
+                .map(|(n, c)| format!("{n}:{c}"))
+                .collect();
+            if !active.is_empty() {
+                ctx.push(format!("Active regions: {}", active.join(", ")));
+            }
+        }
+        if !tone_parts.is_empty() {
+            ctx.push(tone_parts.join(" "));
+        }
+
+        let tone = if ctx.is_empty() { None } else { Some(ctx.join(". ")) };
+        drop(sb); // release MutexGuard before Ollama await
+
+        (tone, assoc_concepts)
     } else {
         (None, vec![])
     };

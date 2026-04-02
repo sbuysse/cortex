@@ -26,6 +26,18 @@ pub struct AssociativeRecall {
     pub propagation_steps: usize,
 }
 
+/// Latest brain state snapshot — updated by the background brain thread,
+/// read by the dialogue route without blocking.
+#[derive(Clone, Default)]
+pub struct BrainSnapshot {
+    /// Decoded association cortex embedding from last recall.
+    pub last_association_embedding: Vec<f32>,
+    /// Per-region spike counts from last recall.
+    pub region_activity: Vec<(String, usize)>,
+    /// Whether the brain has run at least one recall.
+    pub has_data: bool,
+}
+
 /// High-level facade for the spiking brain.
 pub struct SpikingBrain {
     pub network: SpikingNetwork,
@@ -33,6 +45,10 @@ pub struct SpikingBrain {
     pub audio_encoder: LatencyEncoder,
     pub decoder: RateDecoder,
     encoding_window: u16,
+    /// Latest brain snapshot — updated after each associate() call.
+    pub snapshot: BrainSnapshot,
+    /// Pending query embedding to process (set by dialogue, consumed by background tick).
+    pending_query: Option<Vec<f32>>,
 }
 
 impl SpikingBrain {
@@ -53,6 +69,8 @@ impl SpikingBrain {
             audio_encoder: LatencyEncoder::new(512, 20),
             decoder: RateDecoder::new(assoc_n, 50),
             encoding_window: 20,
+            snapshot: BrainSnapshot::default(),
+            pending_query: None,
         }
     }
 
@@ -66,6 +84,8 @@ impl SpikingBrain {
             audio_encoder: LatencyEncoder::new(half.min(512), 20),
             decoder: RateDecoder::new(n_assoc, 50),
             encoding_window: 20,
+            snapshot: BrainSnapshot::default(),
+            pending_query: None,
         }
     }
 
@@ -106,6 +126,30 @@ impl SpikingBrain {
 
     pub fn reward(&mut self, magnitude: f32) { self.network.modulators.reward(magnitude); }
     pub fn novelty(&mut self, magnitude: f32) { self.network.modulators.novelty(magnitude); }
+
+    /// Enqueue a query for associative recall. Non-blocking — the background tick
+    /// will process it and update the snapshot.
+    pub fn enqueue_query(&mut self, embedding: Vec<f32>) {
+        self.pending_query = Some(embedding);
+    }
+
+    /// Get the latest brain snapshot (non-blocking read).
+    pub fn get_snapshot(&self) -> &BrainSnapshot {
+        &self.snapshot
+    }
+
+    /// Background tick — called periodically from a background thread.
+    /// Processes pending queries and updates the snapshot.
+    pub fn tick(&mut self) {
+        if let Some(emb) = self.pending_query.take() {
+            let recall = self.associate(&emb);
+            self.snapshot = BrainSnapshot {
+                last_association_embedding: recall.output_embedding,
+                region_activity: recall.region_activity,
+                has_data: true,
+            };
+        }
+    }
 
     /// Associative recall: encode a query, let activity propagate through
     /// learned connections, read out what the brain associates.

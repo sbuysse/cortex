@@ -157,6 +157,19 @@ impl BrainState {
             }
         };
 
+        // Start spiking brain background tick thread
+        if let Some(ref sb) = spiking_brain {
+            let sb_clone = std::sync::Arc::clone(sb);
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let mut sb = sb_clone.lock().unwrap();
+                    sb.tick();
+                }
+            });
+            tracing::info!("Spiking brain background tick thread started (5s interval)");
+        }
+
         let emotion_table_path = config.project_root
             .join("outputs/cortex/hope_companion/emotion_table.bin");
         let emotion_table = crate::brain_state::load_emotion_table(&emotion_table_path);
