@@ -167,6 +167,12 @@ impl SpikingBrain {
         let pfc_region = if is_full { regions::full_brain::PREFRONTAL } else { 0 };
         let hippo_region = if is_full { regions::full_brain::HIPPOCAMPUS } else { 0 };
 
+        // Reset neuron state — each recall starts clean.
+        // Synaptic weights (learned via STDP) are preserved; only membrane voltages reset.
+        for r in 0..self.network.num_regions() {
+            self.network.region_mut(r).neurons_mut().reset();
+        }
+
         // Only step the 4 regions in the association pathway — saves 60% CPU
         let active_regions = if is_full {
             vec![vis_region, assoc_region, pfc_region, hippo_region]
