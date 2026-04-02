@@ -24,6 +24,8 @@ pub struct AssociativeRecall {
     pub output_embedding: Vec<f32>,
     /// Number of propagation steps.
     pub propagation_steps: usize,
+    /// Concept labels from the neuron-to-concept map (actual associations).
+    pub associated_labels: Vec<String>,
 }
 
 /// Latest brain state snapshot — updated by the background brain thread,
@@ -34,6 +36,8 @@ pub struct BrainSnapshot {
     pub last_association_embedding: Vec<f32>,
     /// Per-region spike counts from last recall.
     pub region_activity: Vec<(String, usize)>,
+    /// Concept labels whose neurons fired during recall (the actual associations).
+    pub associated_labels: Vec<String>,
     /// Whether the brain has run at least one recall.
     pub has_data: bool,
 }
@@ -49,6 +53,10 @@ pub struct SpikingBrain {
     pub snapshot: BrainSnapshot,
     /// Pending query embedding to process (set by dialogue, consumed by background tick).
     pending_query: Option<Vec<f32>>,
+    /// Neuron-to-concept map: which PFC+hippocampus neurons fired for each learned concept.
+    /// Built during learning, used during recall to identify associations.
+    /// Key: PFC/hippo neuron index, Value: list of concept labels that activated it.
+    neuron_concept_map: std::collections::HashMap<usize, Vec<String>>,
 }
 
 impl SpikingBrain {
@@ -71,6 +79,7 @@ impl SpikingBrain {
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
+            neuron_concept_map: std::collections::HashMap::new(),
         }
     }
 
@@ -86,6 +95,7 @@ impl SpikingBrain {
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
+            neuron_concept_map: std::collections::HashMap::new(),
         }
     }
 
@@ -127,6 +137,29 @@ impl SpikingBrain {
     pub fn reward(&mut self, magnitude: f32) { self.network.modulators.reward(magnitude); }
     pub fn novelty(&mut self, magnitude: f32) { self.network.modulators.novelty(magnitude); }
 
+    /// Learn a concept: run the embedding through the brain and record which
+    /// PFC+hippocampus neurons fire. This builds the neuron-to-concept map
+    /// used during recall to identify associations.
+    pub fn learn_concept(&mut self, label: &str, embedding: &[f32]) {
+        let recall = self.associate(embedding);
+
+        // Record which PFC+hippo neurons fired for this concept
+        let is_full = self.network.num_regions() >= 10;
+        let pfc_region = if is_full { regions::full_brain::PREFRONTAL } else { 0 };
+        let hippo_region = if is_full { regions::full_brain::HIPPOCAMPUS } else { 0 };
+
+        for &r in &[pfc_region, hippo_region] {
+            for &idx in self.network.region(r).last_spikes() {
+                // Use region_id * 1_000_000 + neuron_idx as a unique key
+                let key = r * 1_000_000 + idx;
+                self.neuron_concept_map
+                    .entry(key)
+                    .or_insert_with(Vec::new)
+                    .push(label.to_string());
+            }
+        }
+    }
+
     /// Enqueue a query for associative recall. Non-blocking — the background tick
     /// will process it and update the snapshot.
     pub fn enqueue_query(&mut self, embedding: Vec<f32>) {
@@ -151,6 +184,7 @@ impl SpikingBrain {
             self.snapshot = BrainSnapshot {
                 last_association_embedding: recall.output_embedding,
                 region_activity: recall.region_activity,
+                associated_labels: recall.associated_labels,
                 has_data: true,
             };
         }
@@ -244,17 +278,38 @@ impl SpikingBrain {
             .map(|r| (self.network.region(r).name().to_string(), per_region_total[r]))
             .collect();
 
-        // Combine PFC + hippocampus decodings (average the two downstream readouts)
+        // Combine PFC + hippocampus decodings
         let pfc_emb = pfc_decoder.decode();
         let hippo_emb = hippo_decoder.decode();
         let output_embedding: Vec<f32> = pfc_emb.iter().zip(hippo_emb.iter())
             .map(|(p, h)| (p + h) / 2.0)
             .collect();
 
+        // Look up which learned concepts correspond to the fired PFC+hippo neurons
+        let mut concept_hits: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for &r in &[pfc_region, hippo_region] {
+            for &idx in self.network.region(r).last_spikes() {
+                let key = r * 1_000_000 + idx;
+                if let Some(labels) = self.neuron_concept_map.get(&key) {
+                    for label in labels {
+                        *concept_hits.entry(label.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        // Sort by hit count, take top 5
+        let mut sorted_concepts: Vec<(String, usize)> = concept_hits.into_iter().collect();
+        sorted_concepts.sort_by(|a, b| b.1.cmp(&a.1));
+        let associated_labels: Vec<String> = sorted_concepts.into_iter()
+            .take(5)
+            .map(|(label, _)| label)
+            .collect();
+
         AssociativeRecall {
             region_activity: region_spike_counts,
             output_embedding,
             propagation_steps: actual_steps,
+            associated_labels,
         }
     }
 

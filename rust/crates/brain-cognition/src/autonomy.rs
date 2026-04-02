@@ -590,11 +590,13 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
         if let Ok(t_emb) = te.encode(concept) {
             let t_proj = mlp.project_visual(&t_emb);
 
-            // Enqueue for spiking brain (non-blocking — tick thread processes)
+            // Learn concept in spiking brain — runs associate() and maps
+            // which PFC/hippo neurons fire for this concept label.
             if let Some(ref sb) = brain.spiking_brain {
-                let mut sb = sb.lock().unwrap();
-                sb.enqueue_query(t_emb.clone());
-                sb.novelty(0.3);
+                if let Ok(mut sb) = sb.try_lock() {
+                    sb.learn_concept(concept, &t_emb);
+                    sb.novelty(0.3);
+                }
             }
 
             // Store KG edges: topic → has-concept → concept

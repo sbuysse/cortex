@@ -2585,25 +2585,10 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         // Read snapshot from SEPARATE mutex — never contends with tick thread
         let snapshot = brain.spiking_snapshot.lock().unwrap().clone();
 
-        // Match brain's association embedding against LEARNED text concepts.
-        // Searches the learned_concepts store (populated during academic video learning).
-        // These are concepts the brain actually learned — not pre-trained audio labels.
-        let assoc_concepts: Vec<String> = if snapshot.has_data {
-            let emb = &snapshot.last_association_embedding;
-            let learned = brain.learned_concepts.lock().unwrap();
-            if !learned.is_empty() && !emb.is_empty() {
-                let mut scored: Vec<(&str, f32)> = learned.iter().map(|(label, lemb)| {
-                    let sim: f32 = emb.iter().zip(lemb.iter()).map(|(a, b)| a * b).sum();
-                    (label.as_str(), sim)
-                }).collect();
-                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                scored.into_iter()
-                    .take(5)
-                    .filter(|(_, sim)| *sim > 0.1)
-                    .map(|(label, _)| label.to_string())
-                    .collect()
-            } else { vec![] }
-        } else { vec![] };
+        // Brain associations come directly from the neuron-to-concept map.
+        // During learning, PFC/hippo neurons are mapped to concept labels.
+        // During recall, fired neurons are looked up → concept labels returned.
+        let assoc_concepts: Vec<String> = snapshot.associated_labels.clone();
 
         // Build personality tone from neuromodulators (try_lock — skip if busy)
         let mut tone_parts = Vec::new();
