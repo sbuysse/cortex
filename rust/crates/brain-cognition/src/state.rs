@@ -181,12 +181,16 @@ impl BrainState {
                         let mut sb = sb_clone.lock().unwrap();
                         sb.tick();
                         let snap = sb.get_snapshot().clone();
-                        let steps = snap.region_activity.len();
                         let total_spikes: usize = snap.region_activity.iter().map(|(_, c)| *c).sum();
+                        let region_detail: String = snap.region_activity.iter()
+                            .filter(|(_, c)| *c > 0)
+                            .map(|(n, c)| format!("{}:{}", n, c))
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         drop(sb);
                         *snap_clone.lock().unwrap() = snap;
-                        tracing::info!("Spiking brain tick: {:.1}s, {} regions, {} total spikes",
-                            t0.elapsed().as_secs_f32(), steps, total_spikes);
+                        tracing::info!("Spiking brain tick: {:.1}s, {} spikes [{}]",
+                            t0.elapsed().as_secs_f32(), total_spikes, region_detail);
                     }
                 }
             });
