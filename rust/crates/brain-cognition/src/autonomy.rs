@@ -489,11 +489,30 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
     let te = brain.text_encoder.as_ref().ok_or("No text encoder")?;
     let mlp = brain.inference.as_ref().ok_or("No MLP encoder")?;
 
-    // Split transcript into sentences (on ., !, ?)
-    let sentences: Vec<&str> = transcript.split(|c: char| c == '.' || c == '!' || c == '?')
-        .map(|s| s.trim())
-        .filter(|s| s.len() > 20) // skip fragments
-        .collect();
+    // Split transcript into chunks — YouTube subtitles often lack punctuation,
+    // so split on sentences (.!?) AND on ~100-char boundaries for long runs.
+    let mut sentences: Vec<String> = Vec::new();
+    for raw_sentence in transcript.split(|c: char| c == '.' || c == '!' || c == '?') {
+        let s = raw_sentence.trim();
+        if s.len() <= 20 { continue; }
+        if s.len() <= 150 {
+            sentences.push(s.to_string());
+        } else {
+            // Split long runs into ~100-char chunks at word boundaries
+            let words: Vec<&str> = s.split_whitespace().collect();
+            let mut chunk = String::new();
+            for word in words {
+                if chunk.len() + word.len() > 100 && chunk.len() > 20 {
+                    sentences.push(chunk.clone());
+                    chunk.clear();
+                }
+                if !chunk.is_empty() { chunk.push(' '); }
+                chunk.push_str(word);
+            }
+            if chunk.len() > 20 { sentences.push(chunk); }
+        }
+    }
+    let sentences: Vec<&str> = sentences.iter().map(|s| s.as_str()).collect();
 
     tracing::info!("Academic learn: {} sentences from transcript", sentences.len());
 
