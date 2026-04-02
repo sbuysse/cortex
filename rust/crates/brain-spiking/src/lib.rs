@@ -129,7 +129,8 @@ impl SpikingBrain {
 
         // Phase 2: Free propagation — NO new input, let learned connections activate
         // This is where association happens: the stimulus echoes through 2B connections
-        let propagation_steps = 50;
+        // Keep steps low to stay responsive — associations form in the first few steps
+        let propagation_steps = 10;
         let mut region_spike_counts: Vec<(String, usize)> = Vec::new();
 
         // Track spikes during propagation per region
