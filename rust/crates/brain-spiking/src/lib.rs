@@ -16,6 +16,16 @@ use network::{SpikingNetwork, NetworkStats};
 use spike_encoder::LatencyEncoder;
 use spike_decoder::RateDecoder;
 
+/// Result of associative recall — what the brain associates with a query.
+pub struct AssociativeRecall {
+    /// Per-region spike counts during propagation (which regions activated).
+    pub region_activity: Vec<(String, usize)>,
+    /// Decoded embedding from association cortex output neurons.
+    pub output_embedding: Vec<f32>,
+    /// Number of propagation steps.
+    pub propagation_steps: usize,
+}
+
 /// High-level facade for the spiking brain.
 pub struct SpikingBrain {
     pub network: SpikingNetwork,
@@ -92,6 +102,66 @@ impl SpikingBrain {
 
     pub fn reward(&mut self, magnitude: f32) { self.network.modulators.reward(magnitude); }
     pub fn novelty(&mut self, magnitude: f32) { self.network.modulators.novelty(magnitude); }
+
+    /// Associative recall: encode a query, let activity propagate through
+    /// learned connections, read out what the brain associates.
+    /// Returns per-region spike counts (which regions activated) and
+    /// the association cortex output as a decoded embedding.
+    pub fn associate(&mut self, embedding: &[f32]) -> AssociativeRecall {
+        let is_full = self.network.num_regions() >= 10;
+        let vis_region = if is_full { regions::full_brain::VISUAL } else { 0 };
+        let assoc_region = if is_full { regions::full_brain::ASSOCIATION } else { 0 };
+
+        // Phase 1: Encode the query into visual cortex (same as process_visual)
+        let spike_times = self.visual_encoder.encode(embedding);
+        for step in 0..self.encoding_window {
+            for (i, &t) in spike_times.iter().enumerate() {
+                if t == step {
+                    self.network.inject_current(vis_region, i, 3.0);
+                }
+            }
+            self.network.step();
+        }
+
+        // Phase 2: Free propagation — NO new input, let learned connections activate
+        // This is where association happens: the stimulus echoes through 2B connections
+        let propagation_steps = 50;
+        let mut region_spike_counts: Vec<(String, usize)> = Vec::new();
+
+        // Track spikes during propagation per region
+        let num_regions = self.network.num_regions();
+        let mut per_region_total = vec![0usize; num_regions];
+
+        // Reset decoder for clean readout
+        self.decoder.reset();
+
+        for _ in 0..propagation_steps {
+            self.network.step();
+            // Record spikes from association cortex for decoding
+            for &idx in self.network.region(assoc_region).last_spikes() {
+                self.decoder.record_spike(idx, 0);
+            }
+            // Count spikes per region
+            for r in 0..num_regions {
+                per_region_total[r] += self.network.region(r).last_spikes().len();
+            }
+        }
+
+        // Collect region activity
+        for r in 0..num_regions {
+            let name = self.network.region(r).name().to_string();
+            region_spike_counts.push((name, per_region_total[r]));
+        }
+
+        // Decode the association cortex output
+        let output_embedding = self.decoder.decode();
+
+        AssociativeRecall {
+            region_activity: region_spike_counts,
+            output_embedding,
+            propagation_steps,
+        }
+    }
 
     pub fn stats(&self) -> NetworkStats { self.network.stats() }
 

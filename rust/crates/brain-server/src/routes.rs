@@ -2560,14 +2560,16 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         (related, fm_matches, kg_facts)
     } else { (vec![], vec![], vec![]) };
 
-    // ── 2b. Feed spiking brain ─────────────────────────────────────
-    // Read neuromodulator levels (fast), then fire-and-forget the heavy spike simulation.
-    let spiking_ctx = if let Some(ref sb) = brain.spiking_brain {
+    // ── 2b. Associative recall via spiking brain ──────────────────────
+    // Encode the query, let activity propagate through 2B learned connections,
+    // read out what the brain associates. Then match associations against codebook
+    // to get concept names the brain formed through STDP — not stored, not searched.
+    let (spiking_ctx, associated_concepts) = if let Some(ref sb) = brain.spiking_brain {
         let text_emb = brain.text_encoder.as_ref()
             .and_then(|te| te.encode(&message).ok());
 
-        // Read modulator levels and update emotion (fast — no spike simulation)
-        let tone = {
+        // Update neuromodulators from emotion (fast, no simulation)
+        {
             let mut sb = sb.lock().unwrap();
             match detected_emotion {
                 "happy" => { sb.reward(0.5); }
@@ -2576,40 +2578,85 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
                 "confused" => { sb.novelty(0.5); }
                 _ => {}
             }
-            let mods = &sb.network.modulators;
-            let mut tone_parts = Vec::new();
-            if mods.dopamine > 1.3 {
-                tone_parts.push("You feel warmth and connection right now — be especially encouraging and enthusiastic.");
-            }
-            if mods.norepinephrine > 1.3 {
-                tone_parts.push("The person seems distressed — speak slowly, calmly, and be deeply reassuring. Prioritize comfort.");
-            }
-            if mods.acetylcholine > 1.3 {
-                tone_parts.push("Something novel just came up — show genuine curiosity and ask a follow-up question.");
-            }
-            if mods.serotonin < 0.7 {
-                tone_parts.push("The person has been feeling low for a while — be extra gentle and empathetic. Validate their feelings.");
-            }
-            if tone_parts.is_empty() { None } else { Some(tone_parts.join(" ")) }
-            // MutexGuard drops here
-        };
+        }
 
-        // Fire-and-forget: feed embedding into spiking brain in background
-        if let Some(emb) = text_emb {
+        // Run associative recall in background thread (heavy: 70 timesteps through 2B connections)
+        let recall_result = if let Some(emb) = text_emb {
             let sb_clone = std::sync::Arc::clone(brain.spiking_brain.as_ref().unwrap());
+            let emb_clone = emb.clone();
             tokio::task::spawn_blocking(move || {
                 let mut sb = sb_clone.lock().unwrap();
                 let enc_dim = sb.visual_encoder.dim();
-                let truncated: Vec<f32> = emb.iter().take(enc_dim).copied().collect();
+                let truncated: Vec<f32> = emb_clone.iter().take(enc_dim).copied().collect();
                 if truncated.len() == enc_dim {
-                    sb.process_visual(&truncated);
+                    Some(sb.associate(&truncated))
+                } else {
+                    None
                 }
-            });
-        }
+            }).await.ok().flatten()
+        } else {
+            None
+        };
 
-        tone
+        if let Some(recall) = recall_result {
+            // Match the association cortex output embedding against the codebook
+            // These are concepts the BRAIN associates — formed by STDP, not stored
+            let assoc_concepts: Vec<String> = if let Some(mlp) = &brain.inference {
+                let projected = mlp.project_visual(&recall.output_embedding);
+                let cb_guard = brain.codebook.lock().unwrap();
+                if let Some(cb) = cb_guard.as_ref() {
+                    cb.nearest(&projected, 5)
+                        .iter()
+                        .filter(|(_, sim)| *sim > 0.15)
+                        .map(|(label, _)| label.clone())
+                        .collect()
+                } else { vec![] }
+            } else { vec![] };
+
+            // Build personality tone from neuromodulator levels
+            let tone = {
+                let sb = brain.spiking_brain.as_ref().unwrap().lock().unwrap();
+                let mods = &sb.network.modulators;
+                let mut tone_parts = Vec::new();
+                if mods.dopamine > 1.3 {
+                    tone_parts.push("You feel warmth — be encouraging and enthusiastic.");
+                }
+                if mods.norepinephrine > 1.3 {
+                    tone_parts.push("The person seems distressed — be deeply reassuring.");
+                }
+                if mods.acetylcholine > 1.3 {
+                    tone_parts.push("Something novel — show curiosity, ask a follow-up.");
+                }
+                if mods.serotonin < 0.7 {
+                    tone_parts.push("They've been low — be extra gentle and empathetic.");
+                }
+
+                // Include active brain regions in context
+                let active_regions: Vec<String> = recall.region_activity.iter()
+                    .filter(|(_, count)| *count > 0)
+                    .map(|(name, count)| format!("{name}:{count}"))
+                    .collect();
+
+                let mut ctx = Vec::new();
+                if !assoc_concepts.is_empty() {
+                    ctx.push(format!("My brain associates this with: {}", assoc_concepts.join(", ")));
+                }
+                if !active_regions.is_empty() {
+                    ctx.push(format!("Active regions: {}", active_regions.join(", ")));
+                }
+                if !tone_parts.is_empty() {
+                    ctx.push(tone_parts.join(" "));
+                }
+
+                if ctx.is_empty() { None } else { Some(ctx.join(". ")) }
+            };
+
+            (tone, assoc_concepts)
+        } else {
+            (None, vec![])
+        }
     } else {
-        None
+        (None, vec![])
     };
 
     // Compact brain context note for the LLM (grounding without overwhelming it)
@@ -2712,6 +2759,7 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         "grounded": true,
         "native": used_native,
         "spiking_brain": spiking_ctx.is_some(),
+        "brain_associations": associated_concepts,
         "process_time": 0.0,
     }))
 }
