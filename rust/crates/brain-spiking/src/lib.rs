@@ -43,11 +43,15 @@ impl SpikingBrain {
         let vis_n = net.region(regions::full_brain::VISUAL).num_neurons();
         let aud_n = net.region(regions::full_brain::AUDITORY).num_neurons();
         let total_n: usize = (0..net.num_regions()).map(|i| net.region(i).num_neurons()).sum();
+        // Encoder dims match input sources, not region sizes:
+        // Visual/text input: DINOv2 = 384-dim, MiniLM = 384-dim
+        // Audio input: Whisper = 512-dim
+        let assoc_n = net.region(regions::full_brain::ASSOCIATION).num_neurons();
         Self {
             network: net,
-            visual_encoder: LatencyEncoder::new(vis_n.min(512), 20),
-            audio_encoder: LatencyEncoder::new(aud_n.min(512), 20),
-            decoder: RateDecoder::new(total_n, 50),
+            visual_encoder: LatencyEncoder::new(384, 20),
+            audio_encoder: LatencyEncoder::new(512, 20),
+            decoder: RateDecoder::new(assoc_n, 50),
             encoding_window: 20,
         }
     }

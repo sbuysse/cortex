@@ -2584,16 +2584,30 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         let recall_result = if let Some(emb) = text_emb {
             let sb_clone = std::sync::Arc::clone(brain.spiking_brain.as_ref().unwrap());
             let emb_clone = emb.clone();
-            tokio::task::spawn_blocking(move || {
+            match tokio::task::spawn_blocking(move || {
                 let mut sb = sb_clone.lock().unwrap();
                 let enc_dim = sb.visual_encoder.dim();
-                let truncated: Vec<f32> = emb_clone.iter().take(enc_dim).copied().collect();
-                if truncated.len() == enc_dim {
-                    Some(sb.associate(&truncated))
+                if emb_clone.len() == enc_dim {
+                    let recall = sb.associate(&emb_clone);
+                    let total_spikes: usize = recall.region_activity.iter().map(|(_, c)| *c).sum();
+                    tracing::info!(
+                        "Associative recall: {} total spikes across {} regions, output_emb non-zero: {}",
+                        total_spikes,
+                        recall.region_activity.len(),
+                        recall.output_embedding.iter().any(|&v| v > 0.0)
+                    );
+                    Some(recall)
                 } else {
+                    tracing::warn!("Associative recall: embedding dim mismatch (enc_dim={enc_dim}, got={})", emb_clone.len());
                     None
                 }
-            }).await.ok().flatten()
+            }).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Associative recall spawn_blocking failed: {e}");
+                    None
+                }
+            }
         } else {
             None
         };
