@@ -164,8 +164,17 @@ impl SpikingBrain {
         let is_full = self.network.num_regions() >= 10;
         let vis_region = if is_full { regions::full_brain::VISUAL } else { 0 };
         let assoc_region = if is_full { regions::full_brain::ASSOCIATION } else { 0 };
+        let pfc_region = if is_full { regions::full_brain::PREFRONTAL } else { 0 };
+        let hippo_region = if is_full { regions::full_brain::HIPPOCAMPUS } else { 0 };
 
-        // Phase 1: Encode the query into visual cortex (same as process_visual)
+        // Only step the 4 regions in the association pathway — saves 60% CPU
+        let active_regions = if is_full {
+            vec![vis_region, assoc_region, pfc_region, hippo_region]
+        } else {
+            vec![0]
+        };
+
+        // Phase 1: Encode the query into visual cortex
         let spike_times = self.visual_encoder.encode(embedding);
         for step in 0..self.encoding_window {
             for (i, &t) in spike_times.iter().enumerate() {
@@ -173,7 +182,7 @@ impl SpikingBrain {
                     self.network.inject_current(vis_region, i, 3.0);
                 }
             }
-            self.network.step();
+            self.network.step_selective(&active_regions);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -186,8 +195,6 @@ impl SpikingBrain {
         let mut per_region_total = vec![0usize; num_regions];
 
         // Decoders for downstream regions (384-dim each, reading first 384 neurons)
-        let pfc_region = if is_full { regions::full_brain::PREFRONTAL } else { 0 };
-        let hippo_region = if is_full { regions::full_brain::HIPPOCAMPUS } else { 0 };
         let mut pfc_decoder = RateDecoder::new(384, max_propagation_steps);
         let mut hippo_decoder = RateDecoder::new(384, max_propagation_steps);
         self.decoder.reset();
@@ -196,9 +203,8 @@ impl SpikingBrain {
         let mut consecutive_silent = 0;
 
         for _ in 0..max_propagation_steps {
-            self.network.step();
+            self.network.step_selective(&active_regions);
             actual_steps += 1;
-            // Yield CPU so other threads (Ollama, web server) can run
             std::thread::sleep(std::time::Duration::from_millis(10));
 
             let mut step_spikes = 0;
@@ -212,8 +218,8 @@ impl SpikingBrain {
                 if idx < 384 { hippo_decoder.record_spike(idx, 0); }
                 step_spikes += 1;
             }
-            // Count all regions
-            for r in 0..num_regions {
+            // Count active regions only
+            for &r in &active_regions {
                 let n = self.network.region(r).last_spikes().len();
                 per_region_total[r] += n;
                 step_spikes += n;

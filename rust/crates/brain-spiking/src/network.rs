@@ -134,6 +134,36 @@ impl SpikingNetwork {
         self.step_count += 1;
     }
 
+    /// Step only specific regions (selective attention — saves CPU).
+    /// Inter-region spikes are only delivered between active regions.
+    pub fn step_selective(&mut self, active_regions: &[BrainRegionId]) {
+        if !self.finalized {
+            self.finalize();
+        }
+
+        // Step only active regions
+        for &r in active_regions {
+            self.regions[r].step();
+        }
+
+        // Collect fired neurons from active regions
+        let fired: Vec<Vec<usize>> = self.regions.iter()
+            .map(|r| r.last_spikes().to_vec())
+            .collect();
+
+        // Deliver inter-region spikes (only between active regions)
+        for link in &self.inter_links {
+            if active_regions.contains(&link.src_region) && active_regions.contains(&link.tgt_region) {
+                if fired[link.src_region].contains(&(link.src_neuron as usize)) {
+                    self.regions[link.tgt_region]
+                        .inject_current(link.tgt_neuron as usize, link.weight);
+                }
+            }
+        }
+
+        self.step_count += 1;
+    }
+
     pub fn region(&self, id: BrainRegionId) -> &BrainRegion {
         &self.regions[id]
     }
