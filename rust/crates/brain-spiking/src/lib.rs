@@ -133,6 +133,11 @@ impl SpikingBrain {
         self.pending_query = Some(embedding);
     }
 
+    /// Check if there's a pending query to process.
+    pub fn has_pending_query(&self) -> bool {
+        self.pending_query.is_some()
+    }
+
     /// Get the latest brain snapshot (non-blocking read).
     pub fn get_snapshot(&self) -> &BrainSnapshot {
         &self.snapshot

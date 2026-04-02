@@ -170,13 +170,19 @@ impl BrainState {
             let snap_clone = std::sync::Arc::clone(&spiking_snapshot);
             std::thread::spawn(move || {
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(30));
-                    let mut sb = sb_clone.lock().unwrap();
-                    sb.tick();
-                    // Copy snapshot out — dialogue route reads this without locking the brain
-                    let snap = sb.get_snapshot().clone();
-                    drop(sb); // release brain lock BEFORE writing snapshot
-                    *snap_clone.lock().unwrap() = snap;
+                    // Only tick when there's a pending query — otherwise sleep and don't eat CPU
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let has_pending = {
+                        let sb = sb_clone.lock().unwrap();
+                        sb.has_pending_query()
+                    };
+                    if has_pending {
+                        let mut sb = sb_clone.lock().unwrap();
+                        sb.tick();
+                        let snap = sb.get_snapshot().clone();
+                        drop(sb);
+                        *snap_clone.lock().unwrap() = snap;
+                    }
                 }
             });
             tracing::info!("Spiking brain background tick thread started (5s interval)");
