@@ -62,12 +62,12 @@ impl SpikingBrain {
         // Encoder dims match input sources, not region sizes:
         // Visual/text input: DINOv2 = 384-dim, MiniLM = 384-dim
         // Audio input: Whisper = 512-dim
-        let assoc_n = net.region(regions::full_brain::ASSOCIATION).num_neurons();
+        // Decoder reads from first 384 neurons of association cortex (matches input dim)
         Self {
             network: net,
             visual_encoder: LatencyEncoder::new(384, 20),
             audio_encoder: LatencyEncoder::new(512, 20),
-            decoder: RateDecoder::new(assoc_n, 50),
+            decoder: RateDecoder::new(384, 50),
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
@@ -186,9 +186,11 @@ impl SpikingBrain {
 
         for _ in 0..propagation_steps {
             self.network.step();
-            // Record spikes from association cortex for decoding
+            // Record spikes from first 384 neurons of association cortex (matches input dim)
             for &idx in self.network.region(assoc_region).last_spikes() {
-                self.decoder.record_spike(idx, 0);
+                if idx < 384 {
+                    self.decoder.record_spike(idx, 0);
+                }
             }
             // Count spikes per region
             for r in 0..num_regions {
