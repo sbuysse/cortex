@@ -136,4 +136,4 @@ Full reference: [docs/API.md](docs/API.md)
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for personal use, research, education, and non-profit. Commercial use requires a separate license from Akretio.
