@@ -583,19 +583,26 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
     tracing::info!("Academic learn: extracted {} concepts: {:?}",
         all_concepts.len(), &all_concepts[..all_concepts.len().min(5)]);
 
-    // 5. Feed concepts into spiking brain + store in KG
+    // 5. Feed NOVEL concepts into spiking brain + all concepts into KG
+    // Only novel concepts (from video transcript) go into the brain's concept memory.
+    // Audio codebook matches (Coo, Cymbal, etc.) are noise and excluded.
+    let novel_labels: std::collections::HashSet<String> = novel_concepts.iter()
+        .map(|(l, _)| l.clone())
+        .collect();
+
     let mut pairs_generated = 0;
 
     for concept in &all_concepts {
         if let Ok(t_emb) = te.encode(concept) {
             let t_proj = mlp.project_visual(&t_emb);
 
-            // Learn concept in spiking brain — runs associate() and maps
-            // which PFC/hippo neurons fire for this concept label.
-            if let Some(ref sb) = brain.spiking_brain {
-                if let Ok(mut sb) = sb.try_lock() {
-                    sb.learn_concept(concept, &t_emb);
-                    sb.novelty(0.3);
+            // Only learn NOVEL concepts (from transcript, not audio codebook)
+            if novel_labels.contains(concept) {
+                if let Some(ref sb) = brain.spiking_brain {
+                    if let Ok(mut sb) = sb.try_lock() {
+                        sb.learn_concept(concept, &t_emb);
+                        sb.novelty(0.3);
+                    }
                 }
             }
 
