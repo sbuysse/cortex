@@ -2683,7 +2683,7 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             let pm = brain.personal_memory.lock().unwrap();
             let name = brain_cognition::personal::get_user_name(&pm).unwrap_or_else(|| "friend".into());
             let sys = brain_cognition::companion::build_companion_prompt(&pm, detected_emotion, &brain_ctx);
-            let hist: Vec<(String, String)> = brain_cognition::personal::get_recent_conversation(&pm, 8)
+            let hist: Vec<(String, String)> = brain_cognition::personal::get_recent_conversation(&pm, 3)
                 .into_iter().map(|(r, m)| (r, m)).collect();
             (name, sys, hist)
         };
