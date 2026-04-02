@@ -394,21 +394,23 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
     let tmp_dir = format!("/tmp/brain_academic_{ts}");
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
 
-    // 1. Search for a video
-    let search_query = format!("{query} explained");
-    let url_out = tokio::process::Command::new("yt-dlp")
-        .args(["--default-search", "ytsearch3", "--print", "webpage_url",
-               "--no-download", &search_query])
-        .output().await
-        .map_err(|e| format!("yt-dlp search: {e}"))?;
-
-    // Take the first valid URL from results
-    let url = String::from_utf8_lossy(&url_out.stdout)
-        .lines()
-        .find(|l| l.starts_with("http"))
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    // 1. If query is a URL, use it directly. Otherwise search.
+    let url = if query.starts_with("http") {
+        query.to_string()
+    } else {
+        let search_query = format!("{query} explained");
+        let url_out = tokio::process::Command::new("yt-dlp")
+            .args(["--default-search", "ytsearch3", "--print", "webpage_url",
+                   "--no-download", &search_query])
+            .output().await
+            .map_err(|e| format!("yt-dlp search: {e}"))?;
+        String::from_utf8_lossy(&url_out.stdout)
+            .lines()
+            .find(|l| l.starts_with("http"))
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
     if url.is_empty() {
         let _ = std::fs::remove_dir_all(&tmp_dir);
         return Err("No video found".into());
