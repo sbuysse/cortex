@@ -177,11 +177,16 @@ impl BrainState {
                         sb.has_pending_query()
                     };
                     if has_pending {
+                        let t0 = std::time::Instant::now();
                         let mut sb = sb_clone.lock().unwrap();
                         sb.tick();
                         let snap = sb.get_snapshot().clone();
+                        let steps = snap.region_activity.len();
+                        let total_spikes: usize = snap.region_activity.iter().map(|(_, c)| *c).sum();
                         drop(sb);
                         *snap_clone.lock().unwrap() = snap;
+                        tracing::info!("Spiking brain tick: {:.1}s, {} regions, {} total spikes",
+                            t0.elapsed().as_secs_f32(), steps, total_spikes);
                     }
                 }
             });
