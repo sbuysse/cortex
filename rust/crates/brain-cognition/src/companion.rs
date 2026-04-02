@@ -56,7 +56,7 @@ pub async fn llm_reply_owned(
         model,
         messages,
         stream: false,
-        options: OllamaOpts { temperature: 0.7, num_predict: 120 },
+        options: OllamaOpts { temperature: 0.7, num_predict: 300 },
     };
 
     let client = reqwest::Client::builder()

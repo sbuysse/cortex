@@ -91,19 +91,19 @@ pub fn build_full_brain(scale: f32, intra_prob: f32, inter_frac: f32) -> Spiking
         }
     };
 
-    // Feedforward sensory pathway — strong weights so single spikes propagate across regions.
-    // Intra-region cascade is prevented by synaptic clamping; inter-region links bypass clamp.
-    connect_regions(&mut net, &mut rng, VISUAL, ASSOCIATION, inter_frac, (0.8, 1.5), (1, 3));
-    connect_regions(&mut net, &mut rng, AUDITORY, ASSOCIATION, inter_frac, (0.8, 1.5), (1, 3));
+    // Feedforward sensory pathway — strong weights + high connectivity for signal propagation.
+    // inter_frac=0.1 means 10% of source neurons project. For critical paths, use 30%.
+    connect_regions(&mut net, &mut rng, VISUAL, ASSOCIATION, inter_frac * 3.0, (0.8, 1.5), (1, 3));
+    connect_regions(&mut net, &mut rng, AUDITORY, ASSOCIATION, inter_frac * 3.0, (0.8, 1.5), (1, 3));
     connect_regions(
         &mut net, &mut rng,
         ASSOCIATION, PREDICTIVE,
-        inter_frac * 0.5, (0.5, 1.2), (1, 3),
+        inter_frac, (0.5, 1.2), (1, 3),
     );
     connect_regions(
         &mut net, &mut rng,
         ASSOCIATION, PREFRONTAL,
-        inter_frac * 0.5, (0.8, 1.5), (1, 3),
+        inter_frac * 3.0, (0.8, 1.5), (1, 3),
     );
 
     // Feedback from predictive to sensory (weaker — modulatory, not driving)
@@ -118,11 +118,11 @@ pub fn build_full_brain(scale: f32, intra_prob: f32, inter_frac: f32) -> Spiking
         inter_frac * 0.3, (0.1, 0.3), (2, 5),
     );
 
-    // Hippocampus bidirectional with association cortex — strong feedforward
+    // Hippocampus bidirectional with association cortex — strong + dense feedforward
     connect_regions(
         &mut net, &mut rng,
         ASSOCIATION, HIPPOCAMPUS,
-        inter_frac * 0.5, (0.8, 1.5), (1, 3),
+        inter_frac * 3.0, (0.8, 1.5), (1, 3),
     );
     connect_regions(
         &mut net, &mut rng,
