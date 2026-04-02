@@ -174,7 +174,7 @@ impl SpikingBrain {
                 }
             }
             self.network.step();
-            std::thread::yield_now();
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
         // Phase 2: Free propagation — NO new input, let learned connections activate.
@@ -199,7 +199,7 @@ impl SpikingBrain {
             self.network.step();
             actual_steps += 1;
             // Yield CPU so other threads (Ollama, web server) can run
-            std::thread::yield_now();
+            std::thread::sleep(std::time::Duration::from_millis(10));
 
             let mut step_spikes = 0;
             // Read PFC output (downstream — pure association)
