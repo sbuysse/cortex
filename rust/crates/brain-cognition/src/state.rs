@@ -170,7 +170,7 @@ impl BrainState {
             let snap_clone = std::sync::Arc::clone(&spiking_snapshot);
             std::thread::spawn(move || {
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    std::thread::sleep(std::time::Duration::from_secs(30));
                     let mut sb = sb_clone.lock().unwrap();
                     sb.tick();
                     // Copy snapshot out — dialogue route reads this without locking the brain
