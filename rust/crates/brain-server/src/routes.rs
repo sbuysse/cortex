@@ -2561,28 +2561,29 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     // snapshot from the PREVIOUS query's associative recall.
     // The brain runs asynchronously — its associations reflect learned STDP
     // connections, not stored data.
-    let (spiking_ctx, associated_concepts) = if let Some(ref sb) = brain.spiking_brain {
+    let (spiking_ctx, associated_concepts) = if brain.spiking_brain.is_some() {
         let text_emb = brain.text_encoder.as_ref()
             .and_then(|te| te.encode(&message).ok());
 
-        let mut sb = sb.lock().unwrap();
-
-        // Update neuromodulators from emotion
-        match detected_emotion {
-            "happy" => { sb.reward(0.5); }
-            "sad" | "pain" => { sb.network.modulators.arousal(0.3); }
-            "fearful" => { sb.network.modulators.arousal(0.8); }
-            "confused" => { sb.novelty(0.5); }
-            _ => {}
+        // Enqueue query + update neuromodulators (brief lock, instant)
+        if let Some(ref sb) = brain.spiking_brain {
+            if let Ok(mut sb) = sb.try_lock() {
+                match detected_emotion {
+                    "happy" => { sb.reward(0.5); }
+                    "sad" | "pain" => { sb.network.modulators.arousal(0.3); }
+                    "fearful" => { sb.network.modulators.arousal(0.8); }
+                    "confused" => { sb.novelty(0.5); }
+                    _ => {}
+                }
+                if let Some(emb) = text_emb {
+                    sb.enqueue_query(emb);
+                }
+            }
+            // If lock fails (tick is running), skip — query gets picked up next tick
         }
 
-        // Enqueue this query for background associative recall
-        if let Some(emb) = text_emb {
-            sb.enqueue_query(emb);
-        }
-
-        // Read the latest snapshot (from previous query's recall)
-        let snapshot = sb.get_snapshot().clone();
+        // Read snapshot from SEPARATE mutex — never contends with tick thread
+        let snapshot = brain.spiking_snapshot.lock().unwrap().clone();
 
         // Match snapshot's association embedding against codebook
         let assoc_concepts: Vec<String> = if snapshot.has_data {
@@ -2599,20 +2600,24 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             } else { vec![] }
         } else { vec![] };
 
-        // Build personality tone from neuromodulators
-        let mods = &sb.network.modulators;
+        // Build personality tone from neuromodulators (try_lock — skip if busy)
         let mut tone_parts = Vec::new();
-        if mods.dopamine > 1.3 {
-            tone_parts.push("You feel warmth — be encouraging and enthusiastic.");
-        }
-        if mods.norepinephrine > 1.3 {
-            tone_parts.push("The person seems distressed — be deeply reassuring.");
-        }
-        if mods.acetylcholine > 1.3 {
-            tone_parts.push("Something novel — show curiosity, ask a follow-up.");
-        }
-        if mods.serotonin < 0.7 {
-            tone_parts.push("They've been low — be extra gentle and empathetic.");
+        if let Some(ref sb) = brain.spiking_brain {
+            if let Ok(sb) = sb.try_lock() {
+                let mods = &sb.network.modulators;
+                if mods.dopamine > 1.3 {
+                    tone_parts.push("You feel warmth — be encouraging and enthusiastic.");
+                }
+                if mods.norepinephrine > 1.3 {
+                    tone_parts.push("The person seems distressed — be deeply reassuring.");
+                }
+                if mods.acetylcholine > 1.3 {
+                    tone_parts.push("Something novel — show curiosity, ask a follow-up.");
+                }
+                if mods.serotonin < 0.7 {
+                    tone_parts.push("They've been low — be extra gentle and empathetic.");
+                }
+            }
         }
 
         let mut ctx = Vec::new();
@@ -2633,7 +2638,6 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         }
 
         let tone = if ctx.is_empty() { None } else { Some(ctx.join(". ")) };
-        drop(sb); // release MutexGuard before Ollama await
 
         (tone, assoc_concepts)
     } else {

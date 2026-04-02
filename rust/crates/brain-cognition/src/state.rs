@@ -32,6 +32,8 @@ pub struct BrainState {
     pub audio_encoder: Option<brain_inference::WhisperEncoder>,
     pub companion_decoder: Option<brain_inference::CompanionDecoder>,
     pub spiking_brain: Option<std::sync::Arc<std::sync::Mutex<brain_spiking::SpikingBrain>>>,
+    /// Latest brain snapshot — updated by tick thread, read by dialogue route without locking the brain.
+    pub spiking_snapshot: std::sync::Arc<std::sync::Mutex<brain_spiking::BrainSnapshot>>,
     pub emotion_table: Vec<[f32; 512]>,
     pub online_pairs: std::sync::Mutex<Vec<(Vec<f32>, Vec<f32>)>>,
     pub online_learning_count: std::sync::atomic::AtomicI64,
@@ -157,14 +159,21 @@ impl BrainState {
             }
         };
 
+        let spiking_snapshot = std::sync::Arc::new(std::sync::Mutex::new(brain_spiking::BrainSnapshot::default()));
+
         // Start spiking brain background tick thread
         if let Some(ref sb) = spiking_brain {
             let sb_clone = std::sync::Arc::clone(sb);
+            let snap_clone = std::sync::Arc::clone(&spiking_snapshot);
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     let mut sb = sb_clone.lock().unwrap();
                     sb.tick();
+                    // Copy snapshot out — dialogue route reads this without locking the brain
+                    let snap = sb.get_snapshot().clone();
+                    drop(sb); // release brain lock BEFORE writing snapshot
+                    *snap_clone.lock().unwrap() = snap;
                 }
             });
             tracing::info!("Spiking brain background tick thread started (5s interval)");
@@ -228,6 +237,7 @@ impl BrainState {
             audio_encoder,
             companion_decoder,
             spiking_brain,
+            spiking_snapshot,
             emotion_table,
             online_pairs: std::sync::Mutex::new(Vec::new()),
             online_learning_count: std::sync::atomic::AtomicI64::new(online_count),
