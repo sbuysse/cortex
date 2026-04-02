@@ -1,135 +1,142 @@
 #!/bin/bash
-# Cortex Learning Benchmark
-# Proves the spiking brain learns from YouTube videos — knowledge the LLM doesn't have.
+# Cortex Learning Benchmark — Proves the spiking brain learns from YouTube videos.
 #
-# Usage: CORTEX_URL=https://localhost:8443 OLLAMA_URL=http://localhost:11434 ./benchmark_learning.sh
+# The LLM fabricates answers for topics it doesn't know.
+# Cortex watches a video, then answers with ACCURATE information from the video.
+# The proof is accuracy, not "I don't know" vs "I know."
 #
-# What it does:
-# 1. Asks 5 questions to the raw LLM (no Cortex) — records "I don't know" answers
-# 2. Teaches Cortex by watching YouTube videos about each topic
-# 3. Asks Cortex the same questions — records informed answers with brain associations
-# 4. Outputs a comparison table
+# Usage: CORTEX_URL=https://localhost:8443 OLLAMA_URL=http://localhost:11434 \
+#        COMPANION_MODEL=qwen2.5:32b ./benchmark_learning.sh
 
-set -e
+set -euo pipefail
 
-CORTEX_URL="${CORTEX_URL:-https://localhost:8443}"
-OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
-MODEL="${COMPANION_MODEL:-qwen2.5:1.5b}"
+CORTEX="${CORTEX_URL:-https://localhost:8443}"
+OLLAMA="${OLLAMA_URL:-http://localhost:11434}"
+MODEL="${COMPANION_MODEL:-qwen2.5:32b}"
+TICK_WAIT=40  # seconds to wait for brain tick between queries
+
+ask_llm() {
+    local q="$1"
+    curl -s --max-time 15 "$OLLAMA/api/chat" \
+        -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$q Answer in 2-3 sentences.\"}],\"stream\":false,\"options\":{\"num_predict\":200}}" \
+        | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message',{}).get('content','TIMEOUT'))" 2>/dev/null || echo "TIMEOUT"
+}
+
+ask_cortex() {
+    local q="$1"
+    curl -sk --max-time 15 -X POST "$CORTEX/api/brain/dialogue/grounded" \
+        -H "Content-Type: application/json" \
+        -d "{\"message\":\"$q\"}" 2>/dev/null || echo "{}"
+}
+
+learn_video() {
+    local url="$1"
+    curl -sk --max-time 60 -X POST "$CORTEX/api/brain/learn/academic" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"$url\"}" 2>/dev/null || echo "{}"
+}
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║              Cortex Learning Benchmark                       ║"
-echo "║  Spiking brain + foundation encoders + associative recall    ║"
+echo "║  Watch YouTube → Spiking Brain → Accurate Answers            ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "Cortex: $CORTEX_URL"
-echo "Ollama: $OLLAMA_URL ($MODEL)"
+echo "Config: Cortex=$CORTEX Model=$MODEL Tick_wait=${TICK_WAIT}s"
 echo ""
 
-# 5 topics with YouTube videos the LLM likely doesn't know well
-declare -A TOPICS
-declare -A VIDEOS
-declare -A QUESTIONS
+# ── Topics: things the LLM fabricates answers about ──────────────
+TOPICS=("TurboQuant" "COCONUT reasoning" "RWKV Eagle" "Evolutionary Model Merge" "Mamba SSM")
+VIDEOS=(
+    "https://www.youtube.com/watch?v=7YVrb3-ABYE"
+    "https://www.youtube.com/watch?v=mhKC3Avqy2E"
+    "https://www.youtube.com/watch?v=f2voC6K2JDk"
+    "https://www.youtube.com/watch?v=4ADxymEyH90"
+    "https://www.youtube.com/watch?v=9c_bEQ7J68c"
+)
+QUESTIONS=(
+    "How does TurboQuant reduce memory usage for AI models? What specific technique does it use?"
+    "What is COCONUT and how does it change LLM reasoning? What does continuous latent space mean?"
+    "What is the RWKV Eagle architecture? How does it use matrix-valued states?"
+    "How does Sakana AI evolutionary model merge work? What optimization does it use?"
+    "What is the Mamba state space model? How does it compare to Transformers in speed?"
+)
+N=${#TOPICS[@]}
 
-TOPICS[0]="TurboQuant"
-VIDEOS[0]="https://www.youtube.com/watch?v=7YVrb3-ABYE"
-QUESTIONS[0]="How does TurboQuant reduce memory usage for AI models?"
-
-TOPICS[1]="Transformer Squared"
-VIDEOS[1]="https://www.youtube.com/watch?v=rx0wP9k4wGM"
-QUESTIONS[1]="What is Transformer Squared by Sakana AI and how does it work?"
-
-TOPICS[2]="Liquid Neural Networks"
-VIDEOS[2]="https://www.youtube.com/watch?v=RI35E5ewBuI"
-QUESTIONS[2]="How do Liquid Neural Networks from MIT work?"
-
-TOPICS[3]="KAN networks"
-VIDEOS[3]="https://www.youtube.com/watch?v=7zpz_AlFW2w"
-QUESTIONS[3]="What are Kolmogorov-Arnold Networks and how do they differ from MLPs?"
-
-TOPICS[4]="Mamba architecture"
-VIDEOS[4]="https://www.youtube.com/watch?v=9c_bEQ7J68c"
-QUESTIONS[4]="What is the Mamba state space model architecture?"
-
+# ── PHASE 1: Raw LLM baseline ────────────────────────────────────
 echo "═══════════════════════════════════════════════════════════════"
-echo "PHASE 1: Ask raw LLM (no Cortex, no brain)"
+echo "PHASE 1: Raw LLM (no Cortex) — likely fabricated answers"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
-declare -A RAW_ANSWERS
-
-for i in 0 1 2 3 4; do
-    echo "[$i] ${TOPICS[$i]}: ${QUESTIONS[$i]}"
-    RAW_ANSWERS[$i]=$(curl -s --max-time 30 "$OLLAMA_URL/api/chat" \
-        -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"${QUESTIONS[$i]}\"}],\"stream\":false,\"options\":{\"num_predict\":200}}" \
-        | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message',{}).get('content','ERROR')[:200])" 2>/dev/null || echo "TIMEOUT")
-    echo "  → ${RAW_ANSWERS[$i]}"
+RAW_ANSWERS=()
+for ((i=0; i<N; i++)); do
+    echo "[$i] ${TOPICS[$i]}"
+    echo "  Q: ${QUESTIONS[$i]}"
+    ANS=$(ask_llm "${QUESTIONS[$i]}")
+    RAW_ANSWERS+=("$ANS")
+    echo "  A: $ANS"
     echo ""
 done
 
+# ── PHASE 2: Teach Cortex ────────────────────────────────────────
 echo "═══════════════════════════════════════════════════════════════"
 echo "PHASE 2: Teach Cortex (watch YouTube videos)"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
-for i in 0 1 2 3 4; do
-    echo "[$i] Learning: ${TOPICS[$i]} from ${VIDEOS[$i]}"
-    RESULT=$(curl -sk --max-time 60 -X POST "$CORTEX_URL/api/brain/learn/academic" \
-        -H "Content-Type: application/json" \
-        -d "{\"query\": \"${VIDEOS[$i]}\"}" 2>/dev/null || echo "{}")
+for ((i=0; i<N; i++)); do
+    echo "[$i] ${TOPICS[$i]}: ${VIDEOS[$i]}"
+    RESULT=$(learn_video "${VIDEOS[$i]}")
     CONCEPTS=$(echo "$RESULT" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('concepts_learned','ERROR'))" 2>/dev/null || echo "ERROR")
-    echo "  → $CONCEPTS concepts learned"
+    echo "  → $CONCEPTS concepts"
 done
 
+# ── PHASE 3: Ask Cortex with associative recall ──────────────────
+# Each question: prime → wait for tick → ask (reads previous tick's associations)
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
-echo "PHASE 3: Prime brain (enqueue queries for associative recall)"
+echo "PHASE 3: Ask Cortex (with spiking brain associations)"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
-for i in 0 1 2 3 4; do
+CORTEX_ANSWERS=()
+BRAIN_ASSOCS=()
+
+for ((i=0; i<N; i++)); do
+    # Prime
     echo "[$i] Priming: ${TOPICS[$i]}"
-    curl -sk --max-time 15 -X POST "$CORTEX_URL/api/brain/dialogue/grounded" \
-        -H "Content-Type: application/json" \
-        -d "{\"message\": \"${TOPICS[$i]}\"}" > /dev/null 2>&1
-    sleep 35  # Wait for brain tick to process
-done
+    ask_cortex "${TOPICS[$i]}" > /dev/null
+    echo "  Waiting ${TICK_WAIT}s for brain tick..."
+    sleep $TICK_WAIT
 
-echo ""
-echo "═══════════════════════════════════════════════════════════════"
-echo "PHASE 4: Ask Cortex (with brain associations)"
-echo "═══════════════════════════════════════════════════════════════"
-echo ""
-
-declare -A CORTEX_ANSWERS
-declare -A BRAIN_ASSOC
-
-for i in 0 1 2 3 4; do
-    echo "[$i] ${TOPICS[$i]}: ${QUESTIONS[$i]}"
-    RESPONSE=$(curl -sk --max-time 30 -X POST "$CORTEX_URL/api/brain/dialogue/grounded" \
-        -H "Content-Type: application/json" \
-        -d "{\"message\": \"${QUESTIONS[$i]}\"}" 2>/dev/null || echo "{}")
-    CORTEX_ANSWERS[$i]=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('response','ERROR')[:200])" 2>/dev/null || echo "ERROR")
-    BRAIN_ASSOC[$i]=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(', '.join(d.get('brain_associations',[])[:3]) or 'none')" 2>/dev/null || echo "ERROR")
-    echo "  Response: ${CORTEX_ANSWERS[$i]}"
-    echo "  Brain associations: ${BRAIN_ASSOC[$i]}"
+    # Ask (reads associations from the prime's tick)
+    echo "  Asking: ${QUESTIONS[$i]}"
+    RESP=$(ask_cortex "${QUESTIONS[$i]}")
+    ANS=$(echo "$RESP" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('response','TIMEOUT'))" 2>/dev/null || echo "TIMEOUT")
+    ASSOC=$(echo "$RESP" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); a=d.get('brain_associations',[]); print(', '.join(a[:3]) if a else 'none')" 2>/dev/null || echo "none")
+    CORTEX_ANSWERS+=("$ANS")
+    BRAIN_ASSOCS+=("$ASSOC")
+    echo "  Response: $ANS"
+    echo "  Brain: $ASSOC"
     echo ""
-    sleep 35  # Wait for next tick
+    sleep $TICK_WAIT
+done
+
+# ── RESULTS ──────────────────────────────────────────────────────
+echo "═══════════════════════════════════════════════════════════════"
+echo "RESULTS"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+for ((i=0; i<N; i++)); do
+    echo "┌─ ${TOPICS[$i]} ─────────────────────────────────────"
+    echo "│ RAW LLM:  ${RAW_ANSWERS[$i]:0:120}..."
+    echo "│ CORTEX:   ${CORTEX_ANSWERS[$i]:0:120}..."
+    echo "│ BRAIN:    ${BRAIN_ASSOCS[$i]}"
+    echo "└────────────────────────────────────────────────────────"
+    echo ""
 done
 
 echo "═══════════════════════════════════════════════════════════════"
-echo "RESULTS COMPARISON"
-echo "═══════════════════════════════════════════════════════════════"
-echo ""
-echo "| Topic | Raw LLM | Cortex | Brain Associations |"
-echo "|-------|---------|--------|-------------------|"
-
-for i in 0 1 2 3 4; do
-    RAW_SHORT="${RAW_ANSWERS[$i]:0:60}..."
-    CTX_SHORT="${CORTEX_ANSWERS[$i]:0:60}..."
-    echo "| ${TOPICS[$i]} | $RAW_SHORT | $CTX_SHORT | ${BRAIN_ASSOC[$i]} |"
-done
-
-echo ""
-echo "═══════════════════════════════════════════════════════════════"
-echo "Benchmark complete."
+echo "Benchmark complete. $(date)"
 echo "═══════════════════════════════════════════════════════════════"
