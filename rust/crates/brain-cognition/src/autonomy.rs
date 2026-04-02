@@ -538,15 +538,17 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
 
     drop(cb_guard); // release lock before mutating
 
-    // Add novel concepts to codebook
+    // Add novel concepts to learned_concepts store (text-searchable)
     if !novel_concepts.is_empty() {
-        let mut cb_guard = brain.codebook.lock().unwrap();
-        if let Some(cb) = cb_guard.as_mut() {
-            for (label, proj) in &novel_concepts {
-                cb.add_concept(label.clone(), proj);
+        let mut learned = brain.learned_concepts.lock().unwrap();
+        for (label, _proj) in &novel_concepts {
+            // Encode via MiniLM for text-based semantic search
+            if let Ok(emb) = te.encode(label) {
+                learned.push((label.clone(), emb));
             }
-            tracing::info!("Academic learn: added {} novel concepts to codebook", novel_concepts.len());
         }
+        tracing::info!("Academic learn: added {} novel concepts to learned store (total: {})",
+            novel_concepts.len(), learned.len());
     }
 
     let all_concepts: Vec<String> = concepts.iter()

@@ -23,6 +23,9 @@ pub struct BrainState {
     pub personal_memory: std::sync::Mutex<PersonalMemory>,
     pub inference: Option<brain_inference::MlpEncoder>,
     pub text_encoder: Option<brain_inference::TextEncoder>,
+    /// Learned text concepts — (label, 384-dim embedding) pairs from academic learning.
+    /// Searched alongside text_encoder labels during associative recall.
+    pub learned_concepts: std::sync::Mutex<Vec<(String, Vec<f32>)>>,
     pub codebook: std::sync::Mutex<Option<ConceptCodebook>>,
     pub world_model: Option<brain_inference::WorldModel>,
     pub confidence_model: Option<brain_inference::ConfidencePredictor>,
@@ -228,6 +231,7 @@ impl BrainState {
             personal_memory: std::sync::Mutex::new(personal_mem),
             inference,
             text_encoder,
+            learned_concepts: std::sync::Mutex::new(Vec::new()),
             codebook: std::sync::Mutex::new(codebook),
             world_model,
             confidence_model,

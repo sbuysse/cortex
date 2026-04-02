@@ -2585,15 +2585,22 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         // Read snapshot from SEPARATE mutex — never contends with tick thread
         let snapshot = brain.spiking_snapshot.lock().unwrap().clone();
 
-        // Match brain's association embedding against TEXT concepts (not audio codebook).
-        // Uses MiniLM semantic search which includes novel concepts learned from videos.
+        // Match brain's association embedding against LEARNED text concepts.
+        // Searches the learned_concepts store (populated during academic video learning).
+        // These are concepts the brain actually learned — not pre-trained audio labels.
         let assoc_concepts: Vec<String> = if snapshot.has_data {
-            if let Some(te) = &brain.text_encoder {
-                te.semantic_search_embedding(&snapshot.last_association_embedding, 5)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|(_, sim)| *sim > 0.15)
-                    .map(|(label, _)| label)
+            let emb = &snapshot.last_association_embedding;
+            let learned = brain.learned_concepts.lock().unwrap();
+            if !learned.is_empty() && !emb.is_empty() {
+                let mut scored: Vec<(&str, f32)> = learned.iter().map(|(label, lemb)| {
+                    let sim: f32 = emb.iter().zip(lemb.iter()).map(|(a, b)| a * b).sum();
+                    (label.as_str(), sim)
+                }).collect();
+                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                scored.into_iter()
+                    .take(5)
+                    .filter(|(_, sim)| *sim > 0.1)
+                    .map(|(label, _)| label.to_string())
                     .collect()
             } else { vec![] }
         } else { vec![] };

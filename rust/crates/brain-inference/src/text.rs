@@ -189,6 +189,24 @@ impl TextEncoder {
         }).collect())
     }
 
+    /// Add a labeled concept to the searchable label database.
+    /// Encodes the label text via MiniLM and appends to the label store.
+    pub fn add_label(&mut self, label: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let emb = self.encode(label)?;
+        if self.label_embeddings.is_none() {
+            self.label_embeddings = Some(Vec::new());
+            self.labels = Some(Vec::new());
+        }
+        if let (Some(embs), Some(labels)) = (&mut self.label_embeddings, &mut self.labels) {
+            // Avoid duplicates
+            if !labels.contains(&label.to_string()) {
+                embs.push(emb);
+                labels.push(label.to_string());
+            }
+        }
+        Ok(())
+    }
+
     pub fn has_labels(&self) -> bool { self.labels.is_some() }
     pub fn label_count(&self) -> usize { self.labels.as_ref().map(|l| l.len()).unwrap_or(0) }
 }
