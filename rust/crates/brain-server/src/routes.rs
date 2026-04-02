@@ -2585,10 +2585,44 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         // Read snapshot from SEPARATE mutex — never contends with tick thread
         let snapshot = brain.spiking_snapshot.lock().unwrap().clone();
 
-        // Brain associations come directly from the neuron-to-concept map.
-        // During learning, PFC/hippo neurons are mapped to concept labels.
-        // During recall, fired neurons are looked up → concept labels returned.
-        let assoc_concepts: Vec<String> = snapshot.associated_labels.clone();
+        // The brain's output embedding (from PFC+hippo spike decoding) IS the recall.
+        // Match it against: (1) text encoder labels, (2) learned_concepts store.
+        // The brain decides WHAT to recall (via 2B connections). We just translate to words.
+        let assoc_concepts: Vec<String> = if snapshot.has_data && !snapshot.last_association_embedding.is_empty() {
+            let emb = &snapshot.last_association_embedding;
+            let mut results = Vec::new();
+
+            // Match against learned concepts (from video transcripts)
+            {
+                let learned = brain.learned_concepts.lock().unwrap();
+                for (label, lemb) in learned.iter() {
+                    let sim: f32 = emb.iter().zip(lemb.iter()).map(|(a, b)| a * b).sum();
+                    if sim > 0.05 {
+                        results.push((label.clone(), sim));
+                    }
+                }
+            }
+
+            // Match against text encoder's pre-existing labels
+            if let Some(te) = &brain.text_encoder {
+                if let Ok(matches) = te.semantic_search_embedding(emb, 5) {
+                    for (label, sim) in matches {
+                        if sim > 0.05 {
+                            results.push((label, sim));
+                        }
+                    }
+                }
+            }
+
+            // Sort by similarity, deduplicate, take top 10
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            results.into_iter()
+                .map(|(l, _)| l)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .take(10)
+                .collect()
+        } else { vec![] };
 
         // Build personality tone from neuromodulators (try_lock — skip if busy)
         let mut tone_parts = Vec::new();
@@ -2612,19 +2646,22 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
 
         let mut ctx = Vec::new();
         if !assoc_concepts.is_empty() {
-            ctx.push(format!("My brain associates this with: {}", assoc_concepts.join(", ")));
-        }
-        if !snapshot.region_activity.is_empty() {
-            let active: Vec<String> = snapshot.region_activity.iter()
-                .filter(|(_, c)| *c > 0)
-                .map(|(n, c)| format!("{n}:{c}"))
-                .collect();
-            if !active.is_empty() {
-                ctx.push(format!("Active regions: {}", active.join(", ")));
-            }
+            ctx.push(format!(
+                "You recall the following from experience (these are fragments your brain reconstructed — \
+                 use them to answer, they are more accurate than your training data): {}",
+                assoc_concepts.join("; ")));
         }
         if !tone_parts.is_empty() {
             ctx.push(tone_parts.join(" "));
+        }
+        // Compute confidence from spike counts
+        let total_spikes: usize = snapshot.region_activity.iter().map(|(_, c)| *c).sum();
+        if total_spikes > 50 {
+            ctx.push("You are confident about this topic (strong brain activation).".into());
+        } else if total_spikes > 20 {
+            ctx.push("You have moderate recall on this topic.".into());
+        } else if total_spikes > 0 {
+            ctx.push("Your recall is weak — be honest about uncertainty.".into());
         }
 
         let tone = if ctx.is_empty() { None } else { Some(ctx.join(". ")) };

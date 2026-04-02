@@ -53,10 +53,10 @@ pub struct SpikingBrain {
     pub snapshot: BrainSnapshot,
     /// Pending query embedding to process (set by dialogue, consumed by background tick).
     pending_query: Option<Vec<f32>>,
-    /// Concept memory: for each learned concept, store the embedding.
-    /// During recall, find the most similar stored embedding → return its label.
-    /// This is direct concept-to-pattern matching, built during learn_concept().
-    concept_memory: Vec<(String, Vec<f32>)>,
+    // No concept storage. The STDP-modified synaptic weights ARE the memory.
+    // learn_concept() strengthens pathways. associate() recalls through spike propagation.
+    // The decoded PFC+hippo embedding IS the brain's output — matched against
+    // the text encoder's label database (pre-existing, not stored during learning).
 }
 
 impl SpikingBrain {
@@ -79,7 +79,7 @@ impl SpikingBrain {
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
-            concept_memory: Vec::new(),
+            // No concept storage — STDP weights are the memory
         }
     }
 
@@ -95,7 +95,7 @@ impl SpikingBrain {
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
-            concept_memory: Vec::new(),
+            // No concept storage — STDP weights are the memory
         }
     }
 
@@ -137,25 +137,15 @@ impl SpikingBrain {
     pub fn reward(&mut self, magnitude: f32) { self.network.modulators.reward(magnitude); }
     pub fn novelty(&mut self, magnitude: f32) { self.network.modulators.novelty(magnitude); }
 
-    /// Learn a concept: run the embedding through the brain and record which
-    /// PFC+hippocampus neurons fire. This builds the neuron-to-concept map
-    /// used during recall to identify associations.
-    /// Learn a concept: store its embedding for later recall matching.
-    /// Also runs associate() to strengthen STDP connections for this concept.
-    pub fn learn_concept(&mut self, label: &str, embedding: &[f32]) {
-        // Run through the brain to strengthen STDP connections
-        let _recall = self.associate(embedding);
-
-        // Store the concept embedding for cosine matching during recall
-        // Avoid duplicates
-        if !self.concept_memory.iter().any(|(l, _)| l == label) {
-            self.concept_memory.push((label.to_string(), embedding.to_vec()));
+    /// Learn a concept: run it through the brain multiple times to strengthen
+    /// STDP pathways. Stores NOTHING — the modified synaptic weights ARE the memory.
+    /// On recall, the same stimulus will activate the same (now-strengthened) pathways.
+    pub fn learn_concept(&mut self, _label: &str, embedding: &[f32]) {
+        // 5 repetitions — each pass strengthens STDP connections along the pathway.
+        // After 5 passes, the synaptic weights encode this concept's association pattern.
+        for _ in 0..5 {
+            self.associate(embedding);
         }
-    }
-
-    /// Get concept memory size.
-    pub fn concept_memory_size(&self) -> usize {
-        self.concept_memory.len()
     }
 
     /// Enqueue a query for associative recall. Non-blocking — the background tick
@@ -283,27 +273,10 @@ impl SpikingBrain {
             .map(|(p, h)| (p + h) / 2.0)
             .collect();
 
-        // Match query embedding against concept memory using cosine similarity.
-        // The brain's STDP connections contribute to the output embedding, but
-        // the concept matching uses the direct input similarity for reliability.
-        let associated_labels: Vec<String> = if !self.concept_memory.is_empty() {
-            let mut scored: Vec<(&str, f32)> = self.concept_memory.iter()
-                .map(|(label, cemb)| {
-                    let sim: f32 = embedding.iter().zip(cemb.iter())
-                        .map(|(a, b)| a * b)
-                        .sum();
-                    (label.as_str(), sim)
-                })
-                .collect();
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            scored.into_iter()
-                .take(5)
-                .filter(|(_, sim)| *sim > 0.3)
-                .map(|(label, _)| label.to_string())
-                .collect()
-        } else {
-            vec![]
-        };
+        // The output embedding IS the brain's recall — no stored text lookup.
+        // associated_labels is empty here; the route will match output_embedding
+        // against the text encoder's label database to translate spikes → words.
+        let associated_labels = Vec::new();
 
         AssociativeRecall {
             region_activity: region_spike_counts,
