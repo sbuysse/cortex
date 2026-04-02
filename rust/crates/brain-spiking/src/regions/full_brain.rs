@@ -91,86 +91,55 @@ pub fn build_full_brain(scale: f32, intra_prob: f32, inter_frac: f32) -> Spiking
         }
     };
 
-    // Feedforward sensory pathway
-    connect_regions(&mut net, &mut rng, VISUAL, ASSOCIATION, inter_frac, (0.05, 0.3), (1, 5));
-    connect_regions(&mut net, &mut rng, AUDITORY, ASSOCIATION, inter_frac, (0.05, 0.3), (1, 5));
+    // Feedforward sensory pathway — strong weights so single spikes propagate across regions.
+    // Intra-region cascade is prevented by synaptic clamping; inter-region links bypass clamp.
+    connect_regions(&mut net, &mut rng, VISUAL, ASSOCIATION, inter_frac, (0.8, 1.5), (1, 3));
+    connect_regions(&mut net, &mut rng, AUDITORY, ASSOCIATION, inter_frac, (0.8, 1.5), (1, 3));
     connect_regions(
-        &mut net,
-        &mut rng,
-        ASSOCIATION,
-        PREDICTIVE,
-        inter_frac * 0.5,
-        (0.05, 0.2),
-        (1, 5),
+        &mut net, &mut rng,
+        ASSOCIATION, PREDICTIVE,
+        inter_frac * 0.5, (0.5, 1.2), (1, 3),
     );
     connect_regions(
-        &mut net,
-        &mut rng,
-        ASSOCIATION,
-        PREFRONTAL,
-        inter_frac * 0.5,
-        (0.05, 0.2),
-        (2, 8),
+        &mut net, &mut rng,
+        ASSOCIATION, PREFRONTAL,
+        inter_frac * 0.5, (0.8, 1.5), (1, 3),
     );
 
-    // Feedback from predictive to sensory
+    // Feedback from predictive to sensory (weaker — modulatory, not driving)
     connect_regions(
-        &mut net,
-        &mut rng,
-        PREDICTIVE,
-        VISUAL,
-        inter_frac * 0.3,
-        (0.02, 0.15),
-        (2, 8),
+        &mut net, &mut rng,
+        PREDICTIVE, VISUAL,
+        inter_frac * 0.3, (0.1, 0.3), (2, 5),
     );
     connect_regions(
-        &mut net,
-        &mut rng,
-        PREDICTIVE,
-        AUDITORY,
-        inter_frac * 0.3,
-        (0.02, 0.15),
-        (2, 8),
+        &mut net, &mut rng,
+        PREDICTIVE, AUDITORY,
+        inter_frac * 0.3, (0.1, 0.3), (2, 5),
     );
 
-    // Hippocampus bidirectional with association cortex
+    // Hippocampus bidirectional with association cortex — strong feedforward
     connect_regions(
-        &mut net,
-        &mut rng,
-        ASSOCIATION,
-        HIPPOCAMPUS,
-        inter_frac * 0.5,
-        (0.05, 0.25),
-        (2, 6),
+        &mut net, &mut rng,
+        ASSOCIATION, HIPPOCAMPUS,
+        inter_frac * 0.5, (0.8, 1.5), (1, 3),
     );
     connect_regions(
-        &mut net,
-        &mut rng,
-        HIPPOCAMPUS,
-        ASSOCIATION,
-        inter_frac * 0.3,
-        (0.03, 0.15),
-        (3, 8),
+        &mut net, &mut rng,
+        HIPPOCAMPUS, ASSOCIATION,
+        inter_frac * 0.3, (0.3, 0.8), (2, 5),
     );
 
     // PFC bidirectional with association and hippocampus
     connect_regions(
-        &mut net,
-        &mut rng,
-        PREFRONTAL,
-        ASSOCIATION,
-        inter_frac * 0.3,
-        (0.02, 0.15),
-        (3, 10),
+        &mut net, &mut rng,
+        PREFRONTAL, ASSOCIATION,
+        inter_frac * 0.3, (0.3, 0.8), (2, 5),
     );
     connect_regions(
-        &mut net,
-        &mut rng,
-        PREFRONTAL,
-        HIPPOCAMPUS,
-        inter_frac * 0.2,
-        (0.02, 0.1),
-        (3, 10),
+        &mut net, &mut rng,
+        PREFRONTAL, HIPPOCAMPUS,
+        inter_frac * 0.2, (0.5, 1.2), (2, 5),
     );
 
     // Amygdala connections (fast salience detection)
