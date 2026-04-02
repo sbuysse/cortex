@@ -132,11 +132,12 @@ impl SynapseCSR {
     }
 
     /// Deliver spikes: for each fired neuron, add weighted current to targets.
-    /// Applies synaptic scaling: normalizes total input per target neuron to prevent
-    /// activity cascades. Without this, 1000 excitatory inputs overwhelm inhibition.
+    /// Clamps SYNAPTIC input per neuron to prevent activity cascades.
+    /// External input (from encoders via inject_current) is NOT clamped.
     pub fn deliver_spikes(&self, fired: &[usize], current_buf: &mut [f32]) {
-        // Count inputs per target for normalization
-        let mut input_count = vec![0u16; current_buf.len()];
+        // Accumulate synaptic current in a separate buffer, then clamp before adding
+        let n = current_buf.len();
+        let mut synaptic = vec![0.0f32; n];
 
         for &src in fired {
             let start = self.row_ptr[src] as usize;
@@ -144,18 +145,16 @@ impl SynapseCSR {
             for i in start..end {
                 let tgt = self.col_idx[i] as usize;
                 let w = weight_from_i16(self.weights[i]);
-                current_buf[tgt] += w;
-                input_count[tgt] += 1;
+                synaptic[tgt] += w;
             }
         }
 
-        // Synaptic scaling: cap total input to prevent cascade while allowing propagation.
-        // Allow up to MAX_DRIVE of net current per neuron. Anything beyond is clipped.
-        // This is homeostatic — a neuron receiving 1000 inputs behaves like one receiving 10.
-        const MAX_DRIVE: f32 = 0.5; // below threshold — requires multiple correlated inputs to fire
-        for (i, &count) in input_count.iter().enumerate() {
-            if count > 0 {
-                current_buf[i] = current_buf[i].clamp(-MAX_DRIVE, MAX_DRIVE);
+        // Clamp synaptic drive per neuron — prevents cascade.
+        // External current (already in current_buf from inject_current) passes through unclamped.
+        const MAX_SYNAPTIC_DRIVE: f32 = 0.5;
+        for i in 0..n {
+            if synaptic[i] != 0.0 {
+                current_buf[i] += synaptic[i].clamp(-MAX_SYNAPTIC_DRIVE, MAX_SYNAPTIC_DRIVE);
             }
         }
     }
