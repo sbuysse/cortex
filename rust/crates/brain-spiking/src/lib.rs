@@ -53,10 +53,10 @@ pub struct SpikingBrain {
     pub snapshot: BrainSnapshot,
     /// Pending query embedding to process (set by dialogue, consumed by background tick).
     pending_query: Option<Vec<f32>>,
-    /// Neuron-to-concept map: which PFC+hippocampus neurons fired for each learned concept.
-    /// Built during learning, used during recall to identify associations.
-    /// Key: PFC/hippo neuron index, Value: list of concept labels that activated it.
-    neuron_concept_map: std::collections::HashMap<usize, Vec<String>>,
+    /// Concept memory: for each learned concept, store the embedding.
+    /// During recall, find the most similar stored embedding → return its label.
+    /// This is direct concept-to-pattern matching, built during learn_concept().
+    concept_memory: Vec<(String, Vec<f32>)>,
 }
 
 impl SpikingBrain {
@@ -79,7 +79,7 @@ impl SpikingBrain {
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
-            neuron_concept_map: std::collections::HashMap::new(),
+            concept_memory: Vec::new(),
         }
     }
 
@@ -95,7 +95,7 @@ impl SpikingBrain {
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
             pending_query: None,
-            neuron_concept_map: std::collections::HashMap::new(),
+            concept_memory: Vec::new(),
         }
     }
 
@@ -140,24 +140,22 @@ impl SpikingBrain {
     /// Learn a concept: run the embedding through the brain and record which
     /// PFC+hippocampus neurons fire. This builds the neuron-to-concept map
     /// used during recall to identify associations.
+    /// Learn a concept: store its embedding for later recall matching.
+    /// Also runs associate() to strengthen STDP connections for this concept.
     pub fn learn_concept(&mut self, label: &str, embedding: &[f32]) {
-        let recall = self.associate(embedding);
+        // Run through the brain to strengthen STDP connections
+        let _recall = self.associate(embedding);
 
-        // Record which PFC+hippo neurons fired for this concept
-        let is_full = self.network.num_regions() >= 10;
-        let pfc_region = if is_full { regions::full_brain::PREFRONTAL } else { 0 };
-        let hippo_region = if is_full { regions::full_brain::HIPPOCAMPUS } else { 0 };
-
-        for &r in &[pfc_region, hippo_region] {
-            for &idx in self.network.region(r).last_spikes() {
-                // Use region_id * 1_000_000 + neuron_idx as a unique key
-                let key = r * 1_000_000 + idx;
-                self.neuron_concept_map
-                    .entry(key)
-                    .or_insert_with(Vec::new)
-                    .push(label.to_string());
-            }
+        // Store the concept embedding for cosine matching during recall
+        // Avoid duplicates
+        if !self.concept_memory.iter().any(|(l, _)| l == label) {
+            self.concept_memory.push((label.to_string(), embedding.to_vec()));
         }
+    }
+
+    /// Get concept memory size.
+    pub fn concept_memory_size(&self) -> usize {
+        self.concept_memory.len()
     }
 
     /// Enqueue a query for associative recall. Non-blocking — the background tick
@@ -285,25 +283,27 @@ impl SpikingBrain {
             .map(|(p, h)| (p + h) / 2.0)
             .collect();
 
-        // Look up which learned concepts correspond to the fired PFC+hippo neurons
-        let mut concept_hits: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for &r in &[pfc_region, hippo_region] {
-            for &idx in self.network.region(r).last_spikes() {
-                let key = r * 1_000_000 + idx;
-                if let Some(labels) = self.neuron_concept_map.get(&key) {
-                    for label in labels {
-                        *concept_hits.entry(label.clone()).or_insert(0) += 1;
-                    }
-                }
-            }
-        }
-        // Sort by hit count, take top 5
-        let mut sorted_concepts: Vec<(String, usize)> = concept_hits.into_iter().collect();
-        sorted_concepts.sort_by(|a, b| b.1.cmp(&a.1));
-        let associated_labels: Vec<String> = sorted_concepts.into_iter()
-            .take(5)
-            .map(|(label, _)| label)
-            .collect();
+        // Match query embedding against concept memory using cosine similarity.
+        // The brain's STDP connections contribute to the output embedding, but
+        // the concept matching uses the direct input similarity for reliability.
+        let associated_labels: Vec<String> = if !self.concept_memory.is_empty() {
+            let mut scored: Vec<(&str, f32)> = self.concept_memory.iter()
+                .map(|(label, cemb)| {
+                    let sim: f32 = embedding.iter().zip(cemb.iter())
+                        .map(|(a, b)| a * b)
+                        .sum();
+                    (label.as_str(), sim)
+                })
+                .collect();
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            scored.into_iter()
+                .take(5)
+                .filter(|(_, sim)| *sim > 0.3)
+                .map(|(label, _)| label.to_string())
+                .collect()
+        } else {
+            vec![]
+        };
 
         AssociativeRecall {
             region_activity: region_spike_counts,
