@@ -249,14 +249,16 @@ impl SpikingBrain {
             std::thread::sleep(std::time::Duration::from_millis(10));
 
             let mut step_spikes = 0;
-            // Read PFC output (downstream — pure association)
+            // Read PFC output — hash neuron index to decoder slot.
+            // PFC has 200K neurons but decoder has 384 dims. neuron_idx % 384
+            // maps ANY neuron to a decoder slot (projection readout).
             for &idx in self.network.region(pfc_region).last_spikes() {
-                if idx < 384 { pfc_decoder.record_spike(idx, 0); }
+                pfc_decoder.record_spike(idx % 384, 0);
                 step_spikes += 1;
             }
-            // Read hippocampus output (memory recall)
+            // Same for hippocampus
             for &idx in self.network.region(hippo_region).last_spikes() {
-                if idx < 384 { hippo_decoder.record_spike(idx, 0); }
+                hippo_decoder.record_spike(idx % 384, 0);
                 step_spikes += 1;
             }
             // Count active regions only
