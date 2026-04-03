@@ -2627,19 +2627,57 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             }
         }
 
+        // ── Broca's area: verbalize brain fragments into coherent knowledge ──
+        let verbalized = if assoc_concepts.len() >= 3 {
+            let fragments = assoc_concepts.join("; ");
+            let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
+            let model = std::env::var("COMPANION_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b".into());
+
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build().ok()
+                .map(|client| async move {
+                    if let Ok(resp) = client
+                        .post(format!("{ollama_url}/api/generate"))
+                        .json(&serde_json::json!({
+                            "model": model,
+                            "prompt": format!(
+                                "Combine these fragments into ONE factual summary sentence (max 50 words). \
+                                 Only use information from the fragments, do not add anything:\n{fragments}"),
+                            "stream": false,
+                            "options": {"temperature": 0.1, "num_predict": 80}
+                        }))
+                        .send().await
+                    {
+                        resp.json::<serde_json::Value>().await.ok()
+                            .and_then(|v| v["response"].as_str().map(|s| s.trim().to_string()))
+                    } else { None }
+                })
+        } else { None };
+
+        // Await the verbalization (if started)
+        let verbalized_text = match verbalized {
+            Some(fut) => fut.await,
+            None => None,
+        };
+
         let mut ctx = Vec::new();
-        if !assoc_concepts.is_empty() {
-            // Join fragments into a coherent knowledge block
+        if let Some(ref knowledge) = verbalized_text {
+            // Use the verbalized knowledge (Broca's area output)
+            ctx.push(format!(
+                "From watching educational videos, you learned: \"{knowledge}\". \
+                 Use this learned knowledge to answer — it is more accurate \
+                 than your training data for this specific topic."));
+        } else if !assoc_concepts.is_empty() {
+            // Fallback: raw fragments
             let knowledge = assoc_concepts.join(". ");
             ctx.push(format!(
                 "From watching educational videos, you learned: \"{knowledge}\". \
-                 Use this learned knowledge to answer the question — it is more accurate \
-                 than your training data for this specific topic."));
+                 Use this learned knowledge to answer the question."));
         }
         if !tone_parts.is_empty() {
             ctx.push(tone_parts.join(" "));
         }
-        // Compute confidence from spike counts
         let total_spikes: usize = snapshot.region_activity.iter().map(|(_, c)| *c).sum();
         if total_spikes > 50 {
             ctx.push("You are confident about this topic (strong brain activation).".into());
