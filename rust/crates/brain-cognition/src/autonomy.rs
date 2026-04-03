@@ -618,17 +618,8 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
                     let mut queue = brain.triple_queue.lock().unwrap();
                     for triple in &triples {
                         queue.push(triple.clone());
-                        // Link query topic to each extracted subject
-                        // "turboquant" → relates_to → "this technique" (from video)
-                        let topic = query.to_lowercase()
-                            .replace("https://www.youtube.com/watch?v=", "")
-                            .split_whitespace().take(3).collect::<Vec<_>>().join(" ");
-                        if !topic.is_empty() && topic != triple.subject {
-                            queue.push(brain_spiking::Triple::new(&topic, "relates_to", &triple.subject));
-                            queue.push(brain_spiking::Triple::new(&topic, "relates_to", &triple.object));
-                        }
                     }
-                    tracing::info!("Enqueued {} triples + topic links (queue size: {})",
+                    tracing::info!("Enqueued {} triples (queue size: {})",
                         triples.len(), queue.len());
                 }
             }
