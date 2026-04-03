@@ -223,6 +223,10 @@ impl SpikingBrain {
     /// Processes pending queries and updates the snapshot.
     pub fn tick(&mut self) {
         // Process one triple from channel (if any) — sequential STDP learning
+        let pending_triples = self.triple_receiver.len();
+        if pending_triples > 0 {
+            tracing::info!("Triple queue has {} pending triples", pending_triples);
+        }
         if let Ok(triple) = self.triple_receiver.try_recv() {
             tracing::info!("Learning triple: ({}, {}, {})", triple.subject, triple.relation, triple.object);
             self.knowledge.learn_triple(&mut self.network, &triple);
