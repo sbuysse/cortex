@@ -88,28 +88,23 @@ fn build_system_prompt_with_context(mem: &PersonalMemory, current_emotion: &str,
     let mood_trend = personal::get_mood_trend(mem, 4.0).unwrap_or_else(|| "neutral".into());
     let period = get_period();
 
-    // Brain context may contain perceptual grounding AND/OR personality tone directives
-    let brain_note = if brain_ctx.is_empty() {
+    // Brain knowledge is FIRST — the LLM must use it
+    let brain_knowledge = if brain_ctx.is_empty() {
         String::new()
     } else {
-        format!("\n\nInternal state: {brain_ctx}")
+        format!("\nIMPORTANT — {brain_ctx}\n")
     };
 
     format!(
-        "You are Cortex, a warm and caring companion for an elderly person.\n\
+        "You are Cortex, a knowledgeable and caring companion.\n\
+         {brain_knowledge}\
          {personal}.\n\
-         Current mood: {current_emotion} (trend over 4h: {mood_trend}).\n\
-         Time of day: {period}.{brain_note}\n\n\
+         Current mood: {current_emotion}. Time: {period}.\n\n\
          Rules:\n\
-         - Be warm, patient, and genuinely caring\n\
-         - Handle repetition gracefully — never say \"you already told me\"\n\
-         - Use their name and reference their stories naturally\n\
-         - If they seem sad or in pain, be comforting and empathetic\n\
-         - If confused, gently orient (day, time, who visited)\n\
-         - If in pain, acknowledge it and gently suggest they mention it to their nurse or doctor\n\
-         - Keep responses to 1-3 sentences — short and warm\n\
-         - Never give medical advice\n\
-         - Speak naturally, like a caring friend who remembers everything they've shared\n\
+         - If you have learned knowledge above, USE IT to answer accurately\n\
+         - Be warm, patient, and caring\n\
+         - Keep responses to 2-4 sentences\n\
+         - If you don't have learned knowledge on the topic, say so honestly\n\
          - Do NOT mention that you are an AI unless directly asked"
     )
 }
