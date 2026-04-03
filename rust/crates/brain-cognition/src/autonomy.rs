@@ -512,7 +512,22 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
             if chunk.len() > 20 { sentences.push(chunk); }
         }
     }
-    let sentences: Vec<&str> = sentences.iter().map(|s| s.as_str()).collect();
+    // Filter: skip intro (first 10%), skip filler/generic sentences
+    let skip_count = sentences.len() / 10; // skip first 10%
+    let sentences: Vec<&str> = sentences.iter()
+        .skip(skip_count)
+        .filter(|s| {
+            let lower = s.to_lowercase();
+            // Skip common YouTube filler
+            !lower.contains("subscribe") && !lower.contains("like and") &&
+            !lower.contains("check out") && !lower.contains("link in") &&
+            !lower.contains("thank you for watching") && !lower.contains("[music]") &&
+            !lower.starts_with("so ") && !lower.starts_with("okay so") &&
+            // Keep only sentences with some technical density (3+ words >4 chars)
+            s.split_whitespace().filter(|w| w.len() > 4).count() >= 3
+        })
+        .map(|s| s.as_str())
+        .collect();
 
     tracing::info!("Academic learn: {} sentences from transcript", sentences.len());
 

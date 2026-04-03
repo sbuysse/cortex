@@ -2585,43 +2585,26 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         // Read snapshot from SEPARATE mutex — never contends with tick thread
         let snapshot = brain.spiking_snapshot.lock().unwrap().clone();
 
-        // The brain's output embedding (from PFC+hippo spike decoding) IS the recall.
-        // Match it against: (1) text encoder labels, (2) learned_concepts store.
-        // The brain decides WHAT to recall (via 2B connections). We just translate to words.
+        // Match brain's output embedding against LEARNED concepts ONLY.
+        // No audio codebook labels — only knowledge from video transcripts.
+        // The brain decides WHAT to recall. We translate spikes → words.
         let assoc_concepts: Vec<String> = if snapshot.has_data && !snapshot.last_association_embedding.is_empty() {
             let emb = &snapshot.last_association_embedding;
-            let mut results = Vec::new();
-
-            // Match against learned concepts (from video transcripts)
-            {
-                let learned = brain.learned_concepts.lock().unwrap();
-                for (label, lemb) in learned.iter() {
-                    let sim: f32 = emb.iter().zip(lemb.iter()).map(|(a, b)| a * b).sum();
-                    if sim > 0.05 {
-                        results.push((label.clone(), sim));
-                    }
-                }
-            }
-
-            // Match against text encoder's pre-existing labels
-            if let Some(te) = &brain.text_encoder {
-                if let Ok(matches) = te.semantic_search_embedding(emb, 5) {
-                    for (label, sim) in matches {
-                        if sim > 0.05 {
-                            results.push((label, sim));
-                        }
-                    }
-                }
-            }
-
-            // Sort by similarity, deduplicate, take top 10
-            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            results.into_iter()
-                .map(|(l, _)| l)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .take(10)
-                .collect()
+            let learned = brain.learned_concepts.lock().unwrap();
+            if !learned.is_empty() {
+                let mut scored: Vec<(&str, f32)> = learned.iter()
+                    .map(|(label, lemb)| {
+                        let sim: f32 = emb.iter().zip(lemb.iter()).map(|(a, b)| a * b).sum();
+                        (label.as_str(), sim)
+                    })
+                    .collect();
+                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                scored.into_iter()
+                    .take(15)
+                    .filter(|(_, sim)| *sim > 0.01)
+                    .map(|(label, _)| label.to_string())
+                    .collect()
+            } else { vec![] }
         } else { vec![] };
 
         // Build personality tone from neuromodulators (try_lock — skip if busy)
@@ -2646,10 +2629,12 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
 
         let mut ctx = Vec::new();
         if !assoc_concepts.is_empty() {
+            // Join fragments into a coherent knowledge block
+            let knowledge = assoc_concepts.join(". ");
             ctx.push(format!(
-                "You recall the following from experience (these are fragments your brain reconstructed — \
-                 use them to answer, they are more accurate than your training data): {}",
-                assoc_concepts.join("; ")));
+                "From watching educational videos, you learned: \"{knowledge}\". \
+                 Use this learned knowledge to answer the question — it is more accurate \
+                 than your training data for this specific topic."));
         }
         if !tone_parts.is_empty() {
             ctx.push(tone_parts.join(" "));
