@@ -63,8 +63,9 @@ pub struct SpikingBrain {
     pending_query: Option<Vec<f32>>,
     /// Queue of embeddings to learn (5 STDP repetitions each, processed by tick thread).
     learn_queue: Vec<Vec<f32>>,
-    /// Queue of knowledge triples to learn via sequential STDP.
-    triple_queue: Vec<Triple>,
+    /// Queue of knowledge triples — uses crossbeam for lock-free enqueue.
+    triple_sender: crossbeam::channel::Sender<Triple>,
+    triple_receiver: crossbeam::channel::Receiver<Triple>,
 }
 
 impl SpikingBrain {
@@ -85,6 +86,8 @@ impl SpikingBrain {
         let assoc_neurons = net.region(assoc_region).num_neurons();
         let knowledge = KnowledgeEngine::new(assoc_region, assoc_neurons, 100);
 
+        let (triple_sender, triple_receiver) = crossbeam::channel::unbounded();
+
         Self {
             network: net,
             visual_encoder: LatencyEncoder::new(384, 20),
@@ -96,7 +99,8 @@ impl SpikingBrain {
             pending_recall: None,
             pending_query: None,
             learn_queue: Vec::new(),
-            triple_queue: Vec::new(),
+            triple_sender,
+            triple_receiver,
         }
     }
 
@@ -105,6 +109,7 @@ impl SpikingBrain {
         let net = regions::association::build_association_cortex(n_assoc, 0.05);
         let half = n_assoc / 2;
         let knowledge = KnowledgeEngine::new(0, n_assoc, 100);
+        let (triple_sender, triple_receiver) = crossbeam::channel::unbounded();
         Self {
             network: net,
             visual_encoder: LatencyEncoder::new(half.min(512), 20),
@@ -116,7 +121,8 @@ impl SpikingBrain {
             pending_recall: None,
             pending_query: None,
             learn_queue: Vec::new(),
-            triple_queue: Vec::new(),
+            triple_sender,
+            triple_receiver,
         }
     }
 
@@ -168,9 +174,15 @@ impl SpikingBrain {
         self.knowledge.learn_triple(&mut self.network, triple);
     }
 
-    /// Enqueue a triple for background learning (processed by tick thread).
-    pub fn enqueue_triple(&mut self, triple: Triple) {
-        self.triple_queue.push(triple);
+    /// Enqueue a triple for background learning. Uses a lock-free channel —
+    /// can be called from any thread WITHOUT acquiring the brain mutex.
+    pub fn enqueue_triple(&self, triple: Triple) {
+        let _ = self.triple_sender.send(triple);
+    }
+
+    /// Get a clone of the sender for external use (doesn't need brain lock).
+    pub fn triple_sender(&self) -> crossbeam::channel::Sender<Triple> {
+        self.triple_sender.clone()
     }
 
     /// Enqueue a concept name for chain recall (non-blocking).
@@ -210,8 +222,8 @@ impl SpikingBrain {
     /// Background tick — called periodically from a background thread.
     /// Processes pending queries and updates the snapshot.
     pub fn tick(&mut self) {
-        // Process one triple (if any) — sequential STDP learning
-        if let Some(triple) = self.triple_queue.pop() {
+        // Process one triple from channel (if any) — sequential STDP learning
+        if let Ok(triple) = self.triple_receiver.try_recv() {
             tracing::info!("Learning triple: ({}, {}, {})", triple.subject, triple.relation, triple.object);
             self.knowledge.learn_triple(&mut self.network, &triple);
             return;
@@ -254,7 +266,7 @@ impl SpikingBrain {
 
     /// Check if there's pending work.
     pub fn has_pending_work(&self) -> bool {
-        self.pending_query.is_some() || !self.learn_queue.is_empty() || self.pending_recall.is_some() || !self.triple_queue.is_empty()
+        self.pending_query.is_some() || !self.learn_queue.is_empty() || self.pending_recall.is_some() || !self.triple_receiver.is_empty()
     }
 
     /// Associative recall: encode a query, let activity propagate through
