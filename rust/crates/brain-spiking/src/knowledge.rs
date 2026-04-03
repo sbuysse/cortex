@@ -1,4 +1,4 @@
-use crate::concepts::{ConceptRegistry, Triple};
+use crate::concepts::{CellAssembly, ConceptRegistry, Triple};
 use crate::network::SpikingNetwork;
 
 /// Knowledge engine: learns triples via sequential STDP, recalls via chain propagation.
@@ -85,11 +85,33 @@ impl KnowledgeEngine {
     /// Recall a chain starting from a concept.
     /// Activates the start concept, then traces which populations activate in sequence.
     /// Returns an ordered list of (concept_name, activation_strength).
-    pub fn recall_chain(&self, net: &mut SpikingNetwork, start_concept: &str, max_hops: usize) -> Vec<(String, usize)> {
-        let start_asm = match self.registry.get(start_concept) {
-            Some(a) => a.clone(),
-            None => return vec![],
-        };
+    pub fn recall_chain(&self, net: &mut SpikingNetwork, query: &str, max_hops: usize) -> Vec<(String, usize)> {
+        // Find ALL concepts that share words with the query
+        let query_words: Vec<&str> = query.split_whitespace()
+            .filter(|w| w.len() > 3)
+            .collect();
+
+        // Collect matching concepts to activate simultaneously
+        let mut start_assemblies: Vec<(String, CellAssembly)> = Vec::new();
+        for name in self.registry.concept_names() {
+            let name_lower = name.to_lowercase();
+            for &word in &query_words {
+                if name_lower.contains(word) || word.contains(&name_lower) {
+                    if let Some(asm) = self.registry.get(name) {
+                        start_assemblies.push((name.to_string(), asm.clone()));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if start_assemblies.is_empty() {
+            tracing::info!("Chain recall: no concepts match query '{}'", query);
+            return vec![];
+        }
+        tracing::info!("Chain recall: {} concepts match query '{}': {:?}",
+            start_assemblies.len(), query,
+            start_assemblies.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
 
         let region = self.concept_region;
         let current = self.stim_current;
@@ -97,18 +119,21 @@ impl KnowledgeEngine {
         // Reset all neurons for clean recall
         net.region_mut(region).neurons_mut().reset();
 
-        // Inject start concept
+        // Inject ALL matching concepts simultaneously
+        let start_names: std::collections::HashSet<String> = start_assemblies.iter()
+            .map(|(n, _)| n.clone()).collect();
         for _ in 0..20 {
-            for idx in start_asm.neuron_range() {
-                net.inject_current(region, idx, current);
+            for (_, asm) in &start_assemblies {
+                for idx in asm.neuron_range() {
+                    net.inject_current(region, idx, current);
+                }
             }
             net.step_selective(&[region]);
         }
 
         // Now let activity propagate — no more input
         let mut chain: Vec<(String, usize)> = Vec::new();
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        seen.insert(start_concept.to_string());
+        let mut seen: std::collections::HashSet<String> = start_names;
 
         for _hop in 0..max_hops {
             // Run 30 steps of free propagation
@@ -155,19 +180,12 @@ impl KnowledgeEngine {
     }
 
     /// Format a recalled chain as structured knowledge for the LLM.
-    pub fn chain_to_knowledge(start: &str, chain: &[(String, usize)]) -> String {
+    pub fn chain_to_knowledge(query: &str, chain: &[(String, usize)]) -> String {
         if chain.is_empty() {
             return String::new();
         }
 
-        let mut parts = Vec::new();
-        let mut prev = start;
-
-        for (concept, _strength) in chain {
-            parts.push(format!("{prev} → {concept}"));
-            prev = concept;
-        }
-
-        parts.join(". ")
+        let concepts: Vec<&str> = chain.iter().map(|(c, _)| c.as_str()).collect();
+        format!("{query} relates to: {}", concepts.join(" → "))
     }
 }
