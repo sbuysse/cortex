@@ -502,7 +502,7 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
             let words: Vec<&str> = s.split_whitespace().collect();
             let mut chunk = String::new();
             for word in words {
-                if chunk.len() + word.len() > 100 && chunk.len() > 20 {
+                if chunk.len() + word.len() > 200 && chunk.len() > 40 {
                     sentences.push(chunk.clone());
                     chunk.clear();
                 }
@@ -562,7 +562,7 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
             if nearest.is_empty() || nearest[0].1 < 0.4 {
                 // This sentence is about something the codebook doesn't know
                 // Use the first few words as a concept label
-                let label: String = sentence.split_whitespace().take(5).collect::<Vec<_>>().join(" ");
+                let label: String = sentence.split_whitespace().take(15).collect::<Vec<_>>().join(" ");
                 if label.len() > 10 {
                     novel_concepts.push((label, proj));
                 }
