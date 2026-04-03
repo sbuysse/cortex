@@ -616,12 +616,11 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
                 let triples = brain_spiking::extract_triples(concept);
                 if !triples.is_empty() {
                     if let Some(ref sb) = brain.spiking_brain {
-                        if let Ok(mut sb) = sb.try_lock() {
-                            for triple in &triples {
-                                sb.enqueue_triple(triple.clone());
-                            }
-                            sb.novelty(0.3);
+                        let mut sb = sb.lock().unwrap();
+                        for triple in &triples {
+                            sb.enqueue_triple(triple.clone());
                         }
+                        sb.novelty(0.3);
                     }
                     tracing::info!("Academic learn: {} triples from '{}'",
                         triples.len(), &concept[..concept.len().min(50)]);
