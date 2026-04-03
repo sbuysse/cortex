@@ -20,7 +20,7 @@ impl KnowledgeEngine {
             registry: ConceptRegistry::new(region_neurons, assembly_size),
             concept_region,
             stim_current: 5.0,
-            learn_reps: 5,
+            learn_reps: 3,
         }
     }
 
@@ -54,7 +54,7 @@ impl KnowledgeEngine {
                 for idx in s_asm.neuron_range() {
                     net.inject_current(region, idx, current);
                 }
-                net.step();
+                net.step_selective(&[region]);
             }
 
             // Phase 2: Activate relation assembly (20 steps)
@@ -63,7 +63,7 @@ impl KnowledgeEngine {
                 for idx in r_asm.neuron_range() {
                     net.inject_current(region, idx, current);
                 }
-                net.step();
+                net.step_selective(&[region]);
             }
 
             // Phase 3: Activate object assembly (20 steps)
@@ -72,12 +72,12 @@ impl KnowledgeEngine {
                 for idx in o_asm.neuron_range() {
                     net.inject_current(region, idx, current);
                 }
-                net.step();
+                net.step_selective(&[region]);
             }
 
             // Let activity settle (10 steps, no input)
             for _ in 0..10 {
-                net.step();
+                net.step_selective(&[region]);
             }
         }
     }
@@ -102,7 +102,7 @@ impl KnowledgeEngine {
             for idx in start_asm.neuron_range() {
                 net.inject_current(region, idx, current);
             }
-            net.step();
+            net.step_selective(&[region]);
         }
 
         // Now let activity propagate — no more input
@@ -115,7 +115,7 @@ impl KnowledgeEngine {
             let mut population_spikes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
             for _ in 0..30 {
-                net.step();
+                net.step_selective(&[region]);
                 // Count spikes per concept population
                 for &idx in net.region(region).last_spikes() {
                     if let Some(concept) = self.registry.neuron_to_concept(idx) {
@@ -140,7 +140,7 @@ impl KnowledgeEngine {
                             for idx in asm.neuron_range() {
                                 net.inject_current(region, idx, current * 0.5);
                             }
-                            net.step();
+                            net.step_selective(&[region]);
                         }
                     }
                 } else {
