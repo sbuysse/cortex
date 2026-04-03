@@ -56,3 +56,24 @@ fn test_weight_quantization_roundtrip() {
         assert!((back - w).abs() < 0.0001, "roundtrip failed for {w}: got {back}");
     }
 }
+
+#[test]
+fn test_triple_extraction() {
+    let sentences = [
+        "TurboQuant uses quantization to compress models",
+        "this technique compresses the KV cache",
+        "quantization reduces memory usage significantly",
+        "Google published a paper about this method",
+        "the model stores information in vectors",
+    ];
+    for s in &sentences {
+        let triples = brain_spiking::extract_triples(s);
+        println!("\"{}\" → {} triples", s, triples.len());
+        for t in &triples {
+            println!("  ({}, {}, {})", t.subject, t.relation, t.object);
+        }
+    }
+    // At least some sentences should produce triples
+    let total: usize = sentences.iter().map(|s| brain_spiking::extract_triples(s).len()).sum();
+    assert!(total >= 3, "should extract at least 3 triples from 5 sentences, got {total}");
+}

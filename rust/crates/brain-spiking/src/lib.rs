@@ -63,6 +63,8 @@ pub struct SpikingBrain {
     pending_query: Option<Vec<f32>>,
     /// Queue of embeddings to learn (5 STDP repetitions each, processed by tick thread).
     learn_queue: Vec<Vec<f32>>,
+    /// Queue of knowledge triples to learn via sequential STDP.
+    triple_queue: Vec<Triple>,
 }
 
 impl SpikingBrain {
@@ -94,6 +96,7 @@ impl SpikingBrain {
             pending_recall: None,
             pending_query: None,
             learn_queue: Vec::new(),
+            triple_queue: Vec::new(),
         }
     }
 
@@ -113,6 +116,7 @@ impl SpikingBrain {
             pending_recall: None,
             pending_query: None,
             learn_queue: Vec::new(),
+            triple_queue: Vec::new(),
         }
     }
 
@@ -159,11 +163,14 @@ impl SpikingBrain {
         self.learn_queue.push(embedding);
     }
 
-    /// Learn a knowledge triple: (subject, relation, object).
-    /// Encodes via sequential STDP in the association cortex.
-    /// The triple is stored in synaptic weights, not as text.
+    /// Learn a knowledge triple synchronously (use enqueue_triple for async).
     pub fn learn_triple(&mut self, triple: &Triple) {
         self.knowledge.learn_triple(&mut self.network, triple);
+    }
+
+    /// Enqueue a triple for background learning (processed by tick thread).
+    pub fn enqueue_triple(&mut self, triple: Triple) {
+        self.triple_queue.push(triple);
     }
 
     /// Enqueue a concept name for chain recall (non-blocking).
@@ -203,7 +210,13 @@ impl SpikingBrain {
     /// Background tick — called periodically from a background thread.
     /// Processes pending queries and updates the snapshot.
     pub fn tick(&mut self) {
-        // Process one learning item (if any)
+        // Process one triple (if any) — sequential STDP learning
+        if let Some(triple) = self.triple_queue.pop() {
+            tracing::info!("Learning triple: ({}, {}, {})", triple.subject, triple.relation, triple.object);
+            self.knowledge.learn_triple(&mut self.network, &triple);
+            return;
+        }
+        // Process one embedding learning item (if any)
         if let Some(emb) = self.learn_queue.pop() {
             self.learn_one(&emb);
             return;
@@ -241,7 +254,7 @@ impl SpikingBrain {
 
     /// Check if there's pending work.
     pub fn has_pending_work(&self) -> bool {
-        self.pending_query.is_some() || !self.learn_queue.is_empty() || self.pending_recall.is_some()
+        self.pending_query.is_some() || !self.learn_queue.is_empty() || self.pending_recall.is_some() || !self.triple_queue.is_empty()
     }
 
     /// Associative recall: encode a query, let activity propagate through
