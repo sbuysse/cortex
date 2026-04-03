@@ -26,6 +26,8 @@ pub struct BrainState {
     /// Learned text concepts — (label, 384-dim embedding) pairs from academic learning.
     /// Searched alongside text_encoder labels during associative recall.
     pub learned_concepts: std::sync::Mutex<Vec<(String, Vec<f32>)>>,
+    /// Triple queue for knowledge learning — separate from brain mutex, shared with tick thread.
+    pub triple_queue: std::sync::Arc<std::sync::Mutex<Vec<brain_spiking::Triple>>>,
     pub codebook: std::sync::Mutex<Option<ConceptCodebook>>,
     pub world_model: Option<brain_inference::WorldModel>,
     pub confidence_model: Option<brain_inference::ConfidencePredictor>,
@@ -164,14 +166,34 @@ impl BrainState {
 
         let spiking_snapshot = std::sync::Arc::new(std::sync::Mutex::new(brain_spiking::BrainSnapshot::default()));
 
+        let triple_queue = std::sync::Arc::new(std::sync::Mutex::new(Vec::<brain_spiking::Triple>::new()));
+
         // Start spiking brain background tick thread
         if let Some(ref sb) = spiking_brain {
             let sb_clone = std::sync::Arc::clone(sb);
             let snap_clone = std::sync::Arc::clone(&spiking_snapshot);
+            let tq_clone = std::sync::Arc::clone(&triple_queue);
             std::thread::spawn(move || {
                 loop {
-                    // Only tick when there's a pending query — otherwise sleep and don't eat CPU
                     std::thread::sleep(std::time::Duration::from_secs(2));
+
+                    // Check for triples in external queue (no brain lock needed)
+                    let triple = {
+                        let mut q = tq_clone.lock().unwrap();
+                        q.pop()
+                    };
+                    if let Some(triple) = triple {
+                        let t0 = std::time::Instant::now();
+                        tracing::info!("Learning triple: ({}, {}, {})", triple.subject, triple.relation, triple.object);
+                        let mut sb = sb_clone.lock().unwrap();
+                        sb.learn_triple(&triple);
+                        let elapsed = t0.elapsed().as_secs_f32();
+                        tracing::info!("Triple learned in {:.1}s", elapsed);
+                        drop(sb);
+                        continue;
+                    }
+
+                    // Check for pending brain work (needs brain lock)
                     let has_pending = {
                         let sb = sb_clone.lock().unwrap();
                         sb.has_pending_work()
@@ -247,6 +269,7 @@ impl BrainState {
             inference,
             text_encoder,
             learned_concepts: std::sync::Mutex::new(Vec::new()),
+            triple_queue: triple_queue,
             codebook: std::sync::Mutex::new(codebook),
             world_model,
             confidence_model,

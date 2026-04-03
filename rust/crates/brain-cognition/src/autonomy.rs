@@ -615,24 +615,12 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
             if novel_labels.contains(concept) {
                 let triples = brain_spiking::extract_triples(concept);
                 if !triples.is_empty() {
-                    // Use the lock-free channel
-                    if let Some(ref sb) = brain.spiking_brain {
-                        match sb.try_lock() {
-                            Ok(sb) => {
-                                let sender = sb.triple_sender();
-                                drop(sb);
-                                let mut sent = 0;
-                                for triple in &triples {
-                                    match sender.send(triple.clone()) {
-                                        Ok(()) => sent += 1,
-                                        Err(e) => tracing::warn!("Triple send failed: {e}"),
-                                    }
-                                }
-                                tracing::info!("Sent {sent} triples to channel");
-                            }
-                            Err(_) => tracing::warn!("Could not lock brain to get triple sender"),
-                        }
+                    // Enqueue triples in the EXTERNAL queue (not inside brain mutex)
+                    let mut queue = brain.triple_queue.lock().unwrap();
+                    for triple in &triples {
+                        queue.push(triple.clone());
                     }
+                    tracing::info!("Enqueued {} triples (queue size: {})", triples.len(), queue.len());
                     tracing::info!("Academic learn: {} triples from '{}'",
                         triples.len(), &concept[..concept.len().min(50)]);
                 }
