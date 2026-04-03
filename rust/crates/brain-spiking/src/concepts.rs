@@ -118,13 +118,24 @@ impl Triple {
 }
 
 /// Extract (subject, relation, object) triples from a sentence.
-/// Simple rule-based: finds noun-verb-noun patterns.
-/// Not as good as SpaCy but runs in pure Rust with zero dependencies.
-pub fn extract_triples(sentence: &str) -> Vec<Triple> {
-    let words: Vec<&str> = sentence.split_whitespace().collect();
+/// `topic`: the video/query topic used to resolve pronouns ("this" → topic).
+pub fn extract_triples_with_topic(sentence: &str, topic: &str) -> Vec<Triple> {
+    // Resolve pronouns: replace "this/it/that" at sentence start with the topic
+    let pronouns = ["this", "it", "that", "they", "these", "those"];
+    let resolved = {
+        let first_word = sentence.split_whitespace().next().unwrap_or("").to_lowercase();
+        if !topic.is_empty() && pronouns.contains(&first_word.as_str()) {
+            format!("{} {}", topic, &sentence[first_word.len()..])
+        } else {
+            sentence.to_string()
+        }
+    };
+
+    let words: Vec<&str> = resolved.split_whitespace().collect();
     if words.len() < 3 { return vec![]; }
 
     let mut triples = Vec::new();
+    let sentence = &resolved;
 
     // Common relation verbs
     let relation_verbs = [
@@ -192,4 +203,9 @@ pub fn extract_triples(sentence: &str) -> Vec<Triple> {
     }
 
     triples
+}
+
+/// Extract triples without topic (backward compat).
+pub fn extract_triples(sentence: &str) -> Vec<Triple> {
+    extract_triples_with_topic(sentence, "")
 }

@@ -415,7 +415,26 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
         let _ = std::fs::remove_dir_all(&tmp_dir);
         return Err("No video found".into());
     }
-    tracing::info!("Academic learn: {query} → {url}");
+    // Extract topic name for pronoun resolution
+    let topic = if query.starts_with("http") {
+        // Get video title via yt-dlp
+        let title_out = tokio::process::Command::new("yt-dlp")
+            .args(["--print", "title", "--no-download", &url])
+            .output().await.ok();
+        title_out
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    } else {
+        query.to_string()
+    };
+    // Extract key words from topic (first 3 meaningful words)
+    let topic_key: String = topic.split_whitespace()
+        .filter(|w| w.len() > 3)
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    tracing::info!("Academic learn: {query} → {url} (topic: {topic_key})");
 
     // 2. Download auto-subtitles + audio
     let dl = tokio::process::Command::new("yt-dlp")
@@ -613,7 +632,7 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
 
             // Extract triples and enqueue for background learning
             if novel_labels.contains(concept) {
-                let triples = brain_spiking::extract_triples(concept);
+                let triples = brain_spiking::extract_triples_with_topic(concept, &topic_key);
                 if !triples.is_empty() {
                     let mut queue = brain.triple_queue.lock().unwrap();
                     for triple in &triples {

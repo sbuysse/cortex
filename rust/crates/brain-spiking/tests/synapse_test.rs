@@ -77,3 +77,20 @@ fn test_triple_extraction() {
     let total: usize = sentences.iter().map(|s| brain_spiking::extract_triples(s).len()).sum();
     assert!(total >= 3, "should extract at least 3 triples from 5 sentences, got {total}");
 }
+
+#[test]
+fn test_triple_extraction_with_topic() {
+    let triples = brain_spiking::extract_triples_with_topic(
+        "This compresses the KV cache of AI systems", "turboquant");
+    println!("With topic 'turboquant':");
+    for t in &triples { println!("  ({}, {}, {})", t.subject, t.relation, t.object); }
+    assert!(!triples.is_empty());
+    assert!(triples[0].subject.contains("turboquant"), "subject should contain topic, got: {}", triples[0].subject);
+
+    let triples2 = brain_spiking::extract_triples_with_topic(
+        "It reduces memory usage significantly", "turboquant");
+    println!("With topic 'turboquant':");
+    for t in &triples2 { println!("  ({}, {}, {})", t.subject, t.relation, t.object); }
+    assert!(!triples2.is_empty());
+    assert!(triples2[0].subject.contains("turboquant"));
+}

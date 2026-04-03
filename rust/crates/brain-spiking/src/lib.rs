@@ -15,7 +15,7 @@ pub mod synapse;
 pub mod synapse_mmap;
 
 use network::{SpikingNetwork, NetworkStats};
-pub use concepts::{Triple, extract_triples};
+pub use concepts::{Triple, extract_triples, extract_triples_with_topic};
 pub use knowledge::KnowledgeEngine;
 use spike_encoder::LatencyEncoder;
 use spike_decoder::RateDecoder;
