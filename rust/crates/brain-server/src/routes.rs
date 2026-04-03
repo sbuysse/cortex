@@ -2575,9 +2575,8 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
                     "confused" => { sb.novelty(0.5); }
                     _ => {}
                 }
-                if let Some(emb) = text_emb {
-                    sb.enqueue_query(emb);
-                }
+                // Enqueue the message for knowledge chain recall
+                sb.enqueue_recall(message.clone());
             }
             // If lock fails (tick is running), skip — query gets picked up next tick
         }
@@ -2628,21 +2627,29 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         }
 
         let mut ctx = Vec::new();
-        if !assoc_concepts.is_empty() {
-            // Deduplicate fragments
-            let mut unique: Vec<String> = Vec::new();
-            for c in &assoc_concepts {
-                if !unique.contains(c) { unique.push(c.clone()); }
-            }
-            // Present as bullet-pointed knowledge the LLM must use
-            let bullets: String = unique.iter()
-                .map(|c| format!("- {c}"))
-                .collect::<Vec<_>>()
-                .join("\n");
+        // Check for structured knowledge from chain recall
+        let knowledge_entry = assoc_concepts.iter()
+            .find(|c| c.starts_with("KNOWLEDGE: "))
+            .map(|c| c.trim_start_matches("KNOWLEDGE: ").to_string());
+
+        if let Some(knowledge) = knowledge_entry {
             ctx.push(format!(
-                "From watching educational videos, you recall these facts:\n{bullets}\n\
-                 IMPORTANT: Use these recalled facts to answer the question accurately. \
-                 They are more reliable than your training data for this topic."));
+                "From watching educational videos, you learned these relationships:\n{knowledge}\n\
+                 IMPORTANT: Use this knowledge chain to answer accurately. \
+                 It is more reliable than your training data."));
+        } else if !assoc_concepts.is_empty() {
+            let unique: Vec<&String> = assoc_concepts.iter()
+                .filter(|c| !c.starts_with("KNOWLEDGE: "))
+                .collect();
+            if !unique.is_empty() {
+                let bullets: String = unique.iter()
+                    .map(|c| format!("- {c}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                ctx.push(format!(
+                    "From watching educational videos, you recall:\n{bullets}\n\
+                     Use these to answer accurately."));
+            }
         }
         if !tone_parts.is_empty() {
             ctx.push(tone_parts.join(" "));

@@ -1,4 +1,6 @@
 pub mod config;
+pub mod concepts;
+pub mod knowledge;
 pub mod neuromodulation;
 pub mod network;
 pub mod neuron;
@@ -13,6 +15,8 @@ pub mod synapse;
 pub mod synapse_mmap;
 
 use network::{SpikingNetwork, NetworkStats};
+pub use concepts::{Triple, extract_triples};
+pub use knowledge::KnowledgeEngine;
 use spike_encoder::LatencyEncoder;
 use spike_decoder::RateDecoder;
 
@@ -51,6 +55,10 @@ pub struct SpikingBrain {
     encoding_window: u16,
     /// Latest brain snapshot — updated after each associate() call.
     pub snapshot: BrainSnapshot,
+    /// Knowledge engine: learns triples, recalls chains. Uses association cortex.
+    pub knowledge: KnowledgeEngine,
+    /// Pending query concept for chain recall (set by dialogue, consumed by tick).
+    pending_recall: Option<String>,
     /// Pending query embedding to process (set by dialogue, consumed by background tick).
     pending_query: Option<Vec<f32>>,
     /// Queue of embeddings to learn (5 STDP repetitions each, processed by tick thread).
@@ -69,6 +77,12 @@ impl SpikingBrain {
         // Visual/text input: DINOv2 = 384-dim, MiniLM = 384-dim
         // Audio input: Whisper = 512-dim
         // Decoder reads from first 384 neurons of association cortex (matches input dim)
+        // Knowledge engine uses the association cortex for concept cell assemblies.
+        // 100 neurons per concept, capacity = assoc_neurons / 100 concepts.
+        let assoc_region = if net.num_regions() >= 10 { regions::full_brain::ASSOCIATION } else { 0 };
+        let assoc_neurons = net.region(assoc_region).num_neurons();
+        let knowledge = KnowledgeEngine::new(assoc_region, assoc_neurons, 100);
+
         Self {
             network: net,
             visual_encoder: LatencyEncoder::new(384, 20),
@@ -76,6 +90,8 @@ impl SpikingBrain {
             decoder: RateDecoder::new(384, 50),
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
+            knowledge,
+            pending_recall: None,
             pending_query: None,
             learn_queue: Vec::new(),
         }
@@ -85,6 +101,7 @@ impl SpikingBrain {
     pub fn new_association_only(n_assoc: usize) -> Self {
         let net = regions::association::build_association_cortex(n_assoc, 0.05);
         let half = n_assoc / 2;
+        let knowledge = KnowledgeEngine::new(0, n_assoc, 100);
         Self {
             network: net,
             visual_encoder: LatencyEncoder::new(half.min(512), 20),
@@ -92,6 +109,8 @@ impl SpikingBrain {
             decoder: RateDecoder::new(n_assoc, 50),
             encoding_window: 20,
             snapshot: BrainSnapshot::default(),
+            knowledge,
+            pending_recall: None,
             pending_query: None,
             learn_queue: Vec::new(),
         }
@@ -135,11 +154,26 @@ impl SpikingBrain {
     pub fn reward(&mut self, magnitude: f32) { self.network.modulators.reward(magnitude); }
     pub fn novelty(&mut self, magnitude: f32) { self.network.modulators.novelty(magnitude); }
 
-    /// Enqueue a concept for learning. The tick thread will run it through
-    /// the brain multiple times to strengthen STDP pathways.
-    /// Stores NOTHING — the modified synaptic weights ARE the memory.
+    /// Enqueue a concept for learning (old embedding-based, kept for compatibility).
     pub fn enqueue_learn(&mut self, embedding: Vec<f32>) {
         self.learn_queue.push(embedding);
+    }
+
+    /// Learn a knowledge triple: (subject, relation, object).
+    /// Encodes via sequential STDP in the association cortex.
+    /// The triple is stored in synaptic weights, not as text.
+    pub fn learn_triple(&mut self, triple: &Triple) {
+        self.knowledge.learn_triple(&mut self.network, triple);
+    }
+
+    /// Enqueue a concept name for chain recall (non-blocking).
+    pub fn enqueue_recall(&mut self, concept: String) {
+        self.pending_recall = Some(concept);
+    }
+
+    /// Check pending work.
+    pub fn has_pending_recall(&self) -> bool {
+        self.pending_recall.is_some()
     }
 
     /// Process one learning item: run it through 5 STDP repetitions.
@@ -169,12 +203,31 @@ impl SpikingBrain {
     /// Background tick — called periodically from a background thread.
     /// Processes pending queries and updates the snapshot.
     pub fn tick(&mut self) {
-        // Process one learning item (if any) — 5 STDP repetitions
+        // Process one learning item (if any)
         if let Some(emb) = self.learn_queue.pop() {
             self.learn_one(&emb);
-            return; // one item per tick to avoid blocking
+            return;
         }
-        // Process pending query (recall)
+        // Process chain recall (knowledge-based)
+        if let Some(concept) = self.pending_recall.take() {
+            let chain = self.knowledge.recall_chain(&mut self.network, &concept, 6);
+            let knowledge_text = KnowledgeEngine::chain_to_knowledge(&concept, &chain);
+            let labels: Vec<String> = std::iter::once(concept.clone())
+                .chain(chain.iter().map(|(name, _)| name.clone()))
+                .collect();
+            self.snapshot = BrainSnapshot {
+                last_association_embedding: Vec::new(), // not used for chain recall
+                region_activity: Vec::new(),
+                associated_labels: labels,
+                has_data: true,
+            };
+            // Store the formatted knowledge in associated_labels[0] as a special entry
+            if !knowledge_text.is_empty() {
+                self.snapshot.associated_labels.insert(0, format!("KNOWLEDGE: {knowledge_text}"));
+            }
+            return;
+        }
+        // Process pending embedding query (old path)
         if let Some(emb) = self.pending_query.take() {
             let recall = self.associate(&emb);
             self.snapshot = BrainSnapshot {
@@ -186,9 +239,9 @@ impl SpikingBrain {
         }
     }
 
-    /// Check if there's pending work (learn or query).
+    /// Check if there's pending work.
     pub fn has_pending_work(&self) -> bool {
-        self.pending_query.is_some() || !self.learn_queue.is_empty()
+        self.pending_query.is_some() || !self.learn_queue.is_empty() || self.pending_recall.is_some()
     }
 
     /// Associative recall: encode a query, let activity propagate through
