@@ -2575,11 +2575,13 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
                     "confused" => { sb.novelty(0.5); }
                     _ => {}
                 }
-                // Enqueue the message for knowledge chain recall
-                sb.enqueue_recall(message.clone());
+                // (neuromodulators updated inside try_lock above)
             }
             // If lock fails (tick is running), skip — query gets picked up next tick
         }
+
+        // Enqueue recall — NO brain lock needed, separate mutex
+        *brain.recall_queue.lock().unwrap() = Some(message.clone());
 
         // Read snapshot from SEPARATE mutex — never contends with tick thread
         let snapshot = brain.spiking_snapshot.lock().unwrap().clone();

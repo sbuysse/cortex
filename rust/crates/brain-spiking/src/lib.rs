@@ -190,6 +190,13 @@ impl SpikingBrain {
         self.pending_recall = Some(concept);
     }
 
+    /// Recall knowledge chain and format as text.
+    pub fn recall_knowledge(&mut self, query: &str) -> (Vec<(String, usize)>, String) {
+        let chain = self.knowledge.recall_chain(&mut self.network, query, 6);
+        let knowledge = KnowledgeEngine::chain_to_knowledge(query, &chain);
+        (chain, knowledge)
+    }
+
     /// Check pending work.
     pub fn has_pending_recall(&self) -> bool {
         self.pending_recall.is_some()

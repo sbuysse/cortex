@@ -26,8 +26,10 @@ pub struct BrainState {
     /// Learned text concepts — (label, 384-dim embedding) pairs from academic learning.
     /// Searched alongside text_encoder labels during associative recall.
     pub learned_concepts: std::sync::Mutex<Vec<(String, Vec<f32>)>>,
-    /// Triple queue for knowledge learning — separate from brain mutex, shared with tick thread.
+    /// Triple queue for knowledge learning — separate from brain mutex.
     pub triple_queue: std::sync::Arc<std::sync::Mutex<Vec<brain_spiking::Triple>>>,
+    /// Recall queue — concept names to recall via chain propagation.
+    pub recall_queue: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub codebook: std::sync::Mutex<Option<ConceptCodebook>>,
     pub world_model: Option<brain_inference::WorldModel>,
     pub confidence_model: Option<brain_inference::ConfidencePredictor>,
@@ -167,15 +169,37 @@ impl BrainState {
         let spiking_snapshot = std::sync::Arc::new(std::sync::Mutex::new(brain_spiking::BrainSnapshot::default()));
 
         let triple_queue = std::sync::Arc::new(std::sync::Mutex::new(Vec::<brain_spiking::Triple>::new()));
+        let recall_queue: std::sync::Arc<std::sync::Mutex<Option<String>>> = std::sync::Arc::new(std::sync::Mutex::new(None));
 
         // Start spiking brain background tick thread
         if let Some(ref sb) = spiking_brain {
             let sb_clone = std::sync::Arc::clone(sb);
             let snap_clone = std::sync::Arc::clone(&spiking_snapshot);
             let tq_clone = std::sync::Arc::clone(&triple_queue);
+            let rq_clone = std::sync::Arc::clone(&recall_queue);
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(2));
+
+                    // Check for recall request (no brain lock needed to check)
+                    let recall_concept = rq_clone.lock().unwrap().take();
+                    if let Some(concept) = recall_concept {
+                        let t0 = std::time::Instant::now();
+                        tracing::info!("Chain recall starting for: {}", concept);
+                        let mut sb = sb_clone.lock().unwrap();
+                        let (chain, knowledge) = sb.recall_knowledge(&concept);
+                        let labels: Vec<String> = chain.iter().map(|(n, _)| n.clone()).collect();
+                        let mut snap = brain_spiking::BrainSnapshot::default();
+                        snap.has_data = true;
+                        if !knowledge.is_empty() {
+                            snap.associated_labels.push(format!("KNOWLEDGE: {knowledge}"));
+                        }
+                        snap.associated_labels.extend(labels);
+                        drop(sb);
+                        *snap_clone.lock().unwrap() = snap;
+                        tracing::info!("Chain recall done in {:.1}s: {}", t0.elapsed().as_secs_f32(), knowledge);
+                        continue;
+                    }
 
                     // Check for triples in external queue (no brain lock needed)
                     let triple = {
@@ -270,6 +294,7 @@ impl BrainState {
             text_encoder,
             learned_concepts: std::sync::Mutex::new(Vec::new()),
             triple_queue: triple_queue,
+            recall_queue,
             codebook: std::sync::Mutex::new(codebook),
             world_model,
             confidence_model,
