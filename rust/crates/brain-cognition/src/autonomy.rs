@@ -389,7 +389,7 @@ async fn youtube_learn_category(category: &str, brain: &BrainState) -> Result<us
 /// Learn from an academic/educational YouTube video.
 /// Pipeline: download subtitles → extract concepts via Ollama → encode via MiniLM →
 /// feed spiking brain + store in knowledge graph. Also encodes audio → auditory cortex.
-pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<usize, String> {
+pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &BrainState) -> Result<usize, String> {
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
     let tmp_dir = format!("/tmp/brain_academic_{ts}");
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
@@ -415,25 +415,31 @@ pub async fn youtube_learn_academic(query: &str, brain: &BrainState) -> Result<u
         let _ = std::fs::remove_dir_all(&tmp_dir);
         return Err("No video found".into());
     }
-    // Extract topic name for pronoun resolution
-    let topic = if query.starts_with("http") {
-        // Get video title via yt-dlp
+    // Topic for pronoun resolution: user-provided > query words > video title
+    let topic_key: String = if !topic_override.is_empty() {
+        topic_override.to_lowercase()
+    } else if !query.starts_with("http") {
+        query.split_whitespace()
+            .filter(|w| w.len() > 3)
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    } else {
+        // Fallback: get video title
         let title_out = tokio::process::Command::new("yt-dlp")
             .args(["--print", "title", "--no-download", &url])
             .output().await.ok();
-        title_out
+        let title = title_out
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default()
-    } else {
-        query.to_string()
+            .unwrap_or_default();
+        title.split_whitespace()
+            .filter(|w| w.len() > 3)
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
     };
-    // Extract key words from topic (first 3 meaningful words)
-    let topic_key: String = topic.split_whitespace()
-        .filter(|w| w.len() > 3)
-        .take(3)
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase();
     tracing::info!("Academic learn: {query} → {url} (topic: {topic_key})");
 
     // 2. Download auto-subtitles + audio

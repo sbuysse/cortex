@@ -1700,11 +1700,12 @@ pub async fn api_brain_youtube_learn(State(state): State<Arc<AppState>>, Json(bo
 #[axum::debug_handler]
 pub async fn api_brain_learn_academic(State(state): State<Arc<AppState>>, Json(body): Json<serde_json::Value>) -> impl IntoResponse {
     let query = body["query"].as_str().unwrap_or("").to_string();
+    let topic = body["topic"].as_str().unwrap_or("").to_string();
     if query.is_empty() {
         return Json(serde_json::json!({"error": "query required"})).into_response();
     }
     if let Some(brain) = &state.brain {
-        match brain_cognition::autonomy::youtube_learn_academic(&query, brain).await {
+        match brain_cognition::autonomy::youtube_learn_academic(&query, &topic, brain).await {
             Ok(pairs) => Json(serde_json::json!({
                 "status": "learned",
                 "query": query,
