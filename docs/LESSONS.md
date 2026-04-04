@@ -142,3 +142,32 @@ No existing project combines all of these:
 10. Associative recall — the brain THINKS, not just retrieves
 
 The closest competitor (BrainCog) scores 5/10. The field is bifurcated: brain simulators that can't talk, and talking models that aren't brains. Cortex bridges both.
+
+---
+
+## Knowledge Engine (Day 3-4)
+
+### The brain must store RELATIONSHIPS, not text
+**Problem:** Storing transcript sentences or fragments is a database (RAG), not a brain.
+
+**Solution:** Extract (subject, relation, object) triples from sentences. Encode as sequential STDP: subject neurons fire → relation neurons → object neurons. The directional synaptic chain IS the knowledge. No text stored.
+
+### Pronoun resolution is critical for triple quality
+**Problem:** YouTube transcripts say "this compresses the KV cache" not "TurboQuant compresses the KV cache". Triple extractor produces `(this, compresses, kv cache)` — useless.
+
+**Solution:** Accept a `topic` parameter in the learn API. Replace pronoun subjects (this, it, that) with the topic. "This compresses KV cache" + topic "turboquant" → `(turboquant, compresses, kv cache)`.
+
+### External queues prevent mutex starvation
+**Problem:** The spiking brain Mutex is held for 90s during STDP learning. HTTP requests can't enqueue triples or recall queries.
+
+**Solution:** Move triple_queue and recall_queue to BrainState as separate Arc<Mutex<>> fields. HTTP requests enqueue instantly (separate mutex). Tick thread pops from these queues before acquiring the brain lock.
+
+### Video titles are clickbait, not topics
+**Problem:** Video title "Google's New AI Just Broke My Brain" → topic "google's just broke" → pronoun resolution produces garbage triples.
+
+**Solution:** Let the user specify the topic: `{"query": "url", "topic": "turboquant"}`.
+
+### Chain recall needs fuzzy concept matching
+**Problem:** Query "turboquant" doesn't exactly match any registered concept name. Exact lookup returns empty.
+
+**Solution:** Match ALL concepts whose names share words with the query. "what compresses the kv cache" matches concepts containing "compresses" or "cache". Activate all matching concepts simultaneously.

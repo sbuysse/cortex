@@ -1,138 +1,165 @@
 # Cortex
 
-An open cognitive architecture in Rust. Single binary, zero Python runtime dependency, runs on a Raspberry Pi 5.
+A cognitive architecture with a spiking neural brain. Built in Rust. Learns from YouTube videos. Recalls through 2 billion synaptic connections. No text stored — STDP weights are the memory.
 
-Cortex sees (DINOv2, CLIP), hears (Whisper), remembers (Hopfield networks, knowledge graph), reasons (spreading activation, world model), dreams (imagination chains), learns continuously (gradient InfoNCE), and talks (emotion-aware companion dialogue).
+## What Makes This Different
 
-## Why This Exists
+Most AI systems retrieve information from databases. Cortex **learns** it — through spike-timing-dependent plasticity across 2 billion connections in 10 brain regions. When you ask a question, the answer comes from neural activation patterns propagating through learned synaptic pathways, not from a lookup table.
 
-Most AI systems are stateless inference endpoints. Cortex is a persistent, self-improving cognitive system that maintains its own memory, knowledge, and internal state across time. It perceives multimodal input, forms associations, builds a knowledge graph, tracks emotions, and generates behavior — all on-device, all private.
+**Watch a video → Extract knowledge triples → Learn via sequential STDP → Recall through spike propagation → Answer from neural associations**
 
-This isn't a chatbot wrapper. It's a reference implementation for what a complete cognitive architecture looks like when you build it from scratch.
+No other system combines:
+- Spiking neural network (2M neurons, 2B connections, STDP learning)
+- 10 biologically-inspired brain regions with inter-region connectivity
+- Foundation model encoders (DINOv2, CLIP, Whisper, MiniLM)
+- Knowledge triple extraction and sequential STDP encoding
+- Associative chain recall through learned synaptic pathways
+- Natural language dialogue shaped by neuromodulators
+- Learns from YouTube videos with zero LLM dependency for extraction
+- Persistent memory across restarts via synaptic weight save/load
+- Sleep consolidation (NREM replay + REM noise + structural pruning)
+- Runs on commodity hardware (single machine, CPU)
+
+## The Spiking Brain
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    brain-spiking                             │
+│                                                              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
+│  │ Visual   │ │ Auditory │ │Association│ │Predictive│       │
+│  │ Cortex   │→│ Cortex   │→│ Cortex   │→│ Cortex   │       │
+│  │ (200K)   │ │ (200K)   │ │ (500K)   │ │ (200K)   │       │
+│  └──────────┘ └──────────┘ └────┬─────┘ └──────────┘       │
+│                                  │                           │
+│  ┌──────────┐ ┌──────────┐ ┌────┴─────┐ ┌──────────┐       │
+│  │Hippocampus│ │Prefrontal│ │ Amygdala │ │  Motor   │       │
+│  │ (300K)   │←│ (200K)  │←│ (100K)   │ │ (100K)   │       │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
+│                                                              │
+│  ┌──────────┐ ┌──────────┐                                  │
+│  │Brainstem │ │Cerebellum│  4 Neuromodulators:              │
+│  │ (50K)    │ │ (150K)   │  DA · ACh · NE · 5-HT           │
+│  └──────────┘ └──────────┘                                  │
+│                                                              │
+│  2,000,000 ALIF neurons · 2,000,000,000 synapses            │
+│  Three-factor STDP · TACOS dual-weight · Structural pruning │
+│  Cell assemblies · Knowledge triples · Chain recall          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### How It Learns
+
+1. **Watch**: YouTube video → auto-subtitles → sentence chunks
+2. **Extract**: Rule-based SVO triple extraction with pronoun resolution
+   - "This compresses the KV cache" + topic "TurboQuant" → `(turboquant, compresses, kv_cache)`
+3. **Encode**: Sequential STDP — subject neurons fire (20 steps) → relation neurons (20 steps) → object neurons (20 steps). Repeated 3x. The directional synaptic chain is the knowledge.
+4. **Recall**: Query activates matching concept populations → spikes propagate through STDP-strengthened pathways → downstream populations fire → chain of activated concepts is the answer
+
+No text is stored in the brain. The synaptic weight pattern IS the memory.
+
+### How It Recalls
+
+```
+Query: "What compresses the KV cache?"
+
+1. Fuzzy concept matching: "compresses" → concept population
+                           "cache" → concept population
+2. Activate matching populations (20 timesteps)
+3. Free propagation through 2B learned connections (30 steps)
+4. Read which populations activated in sequence
+5. Chain: turboquant → compresses → kv_cache → is → short_term_memory
+6. LLM receives: "TurboQuant compresses the KV cache, which is the short-term memory"
+```
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                     brain-server (axum)                           │
-│  HTTPS :443 — 7 HTML pages + 60+ JSON endpoints + SSE           │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │                   brain-cognition                            │  │
-│  │                                                              │  │
-│  │  Working Memory    Fast Memory     Grid Cells    Codebook    │  │
-│  │  (7-slot theta-    (Hopfield       (hexagonal    (865+       │  │
-│  │   gamma buffer)     2000 patterns)  spatial 2D)   categories) │  │
-│  │                                                              │  │
-│  │  Personal Memory   Emotion         Companion     Dreams      │  │
-│  │  (facts, family,   (7 classes,     (daily rhythm, (world     │  │
-│  │   health, KG)       mood tracking)  safety alerts)  model)    │  │
-│  │                                                              │  │
-│  │  Knowledge Graph   Autonomy Loop   SSE Bus                   │  │
-│  │  (6K+ edges,       (5-min self-    (real-time                │  │
-│  │   5 relation types) improvement)    broadcast)               │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │                   brain-inference (tch-rs)                    │  │
-│  │                                                              │  │
-│  │  DINOv2   CLIP   Whisper   MiniLM   WorldModel   MLP        │  │
-│  │  (384d)   (512d)  (512d)   (384d)   (512→512)   (V+A→512)  │  │
-│  │                                                              │  │
-│  │  Mel Spectrogram   VAD   Face Database   Emotion Classifier  │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  brain-core          brain-db           brain-experiment          │
-│  (Hebbian networks)  (SQLite KG)        (cortex mutation loop)   │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-## What It Can Do
-
-**Perceive** — Process images (DINOv2/CLIP) and audio (Whisper) into a shared embedding space. Real-time voice activity detection, face recognition, mel spectrogram computation.
-
-**Remember** — 7-slot working memory with theta-gamma oscillation. Hopfield associative memory (2000 patterns). Episodic memory with temporal clustering. Personal knowledge graph (family, health, preferences).
-
-**Reason** — World model predicts cross-modal associations. Knowledge graph traversal with spreading activation. Concept arithmetic (add/subtract embeddings). Confidence estimation and novelty detection.
-
-**Dream** — Imagination chains: start from a concept, predict what follows, explore surprising paths. Each dream generates new training pairs for self-improvement.
-
-**Learn** — Gradient InfoNCE training runs in Rust. Online learning from new perceptions. Autonomous 5-minute improvement cycles. Cortex daemon tests mutations against a fitness function.
-
-**Talk** — Emotion detection from text (7 classes). Personal memory informs every response. Mood tracking over time. Safety alerts for caregivers. Brain state (working memory + knowledge + emotion) grounds the dialogue.
-
-## Quick Start
-
-```bash
-# Clone
-git clone https://github.com/sbuysse/cortex.git
-cd cortex
-
-# Build (requires libtorch)
-cd rust
-export LIBTORCH=/path/to/libtorch
-export LIBTORCH_USE_PYTORCH=1
-export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH
-cargo build --release -p brain-server
-
-# Run (minimal — no models needed for core cognition)
-BRAIN_PROJECT_ROOT=$(pwd)/.. ./target/release/brain-server
-```
-
-Visit `https://localhost` for the dashboard. See [CONTRIBUTING.md](CONTRIBUTING.md) for full setup.
-
-## API Overview
-
-60+ endpoints organized by cognitive function:
-
-| Domain | Endpoints | Examples |
-|--------|-----------|---------|
-| **Perception** | `/api/brain/watch`, `/api/listen/process` | Process image or audio → embeddings + associations |
-| **Cognition** | `/api/brain/predict`, `/api/brain/reason`, `/api/brain/compose` | World model prediction, KG reasoning, concept arithmetic |
-| **Memory** | `/api/brain/working_memory`, `/api/brain/episodes`, `/api/brain/prototypes` | Working memory state, episodic timeline, learned concepts |
-| **Dreams** | `/api/brain/dream`, `/api/brain/think` | Imagination chains, multi-step reasoning |
-| **Learning** | `/api/brain/learn`, `/api/brain/learn/train` | Buffer pairs, train online |
-| **Autonomy** | `/api/brain/autonomy/start` | Self-directed learning loop |
-| **Companion** | `/api/brain/dialogue/grounded`, `/api/companion/safety` | Emotion-aware dialogue, caregiver alerts |
-| **Spatial** | `/api/brain/grid/map`, `/api/brain/grid/navigate` | Hexagonal grid, concept navigation |
-
-Full reference: [docs/API.md](docs/API.md)
-
-## Crate Structure
+9 Rust crates, 60+ API endpoints, 13 SQLite tables, 8 TorchScript models.
 
 | Crate | Purpose |
 |-------|---------|
-| `brain-server` | Axum web server, 60+ routes, 7 HTML pages, TLS |
+| `brain-spiking` | **NEW** — ALIF neurons, CSR synapses, 10 brain regions, STDP, neuromodulation, knowledge engine, chain recall |
+| `brain-server` | Axum web server, 60+ routes, 8 HTML pages, TLS, SSE |
 | `brain-cognition` | Working memory, fast memory, knowledge graph, companion, dreams, autonomy |
-| `brain-inference` | TorchScript model loading (DINOv2, CLIP, Whisper, MiniLM, world model, MLP) |
-| `brain-core` | Low-level matrix ops, Hebbian association networks |
+| `brain-inference` | TorchScript model loading (DINOv2, CLIP, Whisper, MiniLM, world model) |
+| `brain-core` | Hebbian association networks, sparse projections |
 | `brain-db` | SQLite persistence (13 tables) |
 | `brain-experiment` | Cortex daemon — self-improving mutation loop |
 | `brain-traits` | Shared trait definitions |
 | `mutation-template` | Template for experimental variants |
 
-## Design Principles
+## Quick Start
 
-**Single binary** — No Python runtime, no Docker, no microservices. One `cargo build` produces one 28MB binary that loads TorchScript models at startup.
+```bash
+git clone https://github.com/sbuysse/cortex.git
+cd cortex/rust
 
-**On-device** — All processing is local. No cloud APIs, no data leaves the device. Runs on a Raspberry Pi 5 (8GB).
+# Build (requires libtorch)
+export LIBTORCH=/path/to/libtorch
+export LIBTORCH_USE_PYTORCH=1
+export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH
+cargo build --release -p brain-server
 
-**Neuroscience-informed** — Working memory modeled on theta-gamma phase coupling. Hopfield networks for associative memory. Grid cells for spatial representation. Dream replay for memory consolidation.
+# Run with spiking brain (scale: 0.01=test, 0.1=dev, 1.0=full)
+BRAIN_PROJECT_ROOT=$(pwd)/.. SPIKING_SCALE=0.1 ./target/release/brain-server
+```
 
-**Self-improving** — The cortex daemon runs experiments autonomously, testing mutations to its own training loop and architecture against a fitness function. Over 23,000 experiments completed.
+### Teach it something
 
-**Privacy-first** — No recordings stored, only extracted facts and embeddings. SQLite database stays on-device. No telemetry, no analytics.
+```bash
+# Watch a YouTube video about TurboQuant
+curl -sk -X POST https://localhost/api/brain/learn/academic \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "https://www.youtube.com/watch?v=7YVrb3-ABYE", "topic": "turboquant"}'
+
+# Ask about it (after learning completes)
+curl -sk -X POST https://localhost/api/brain/dialogue/grounded \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "How does TurboQuant reduce memory?"}'
+```
+
+## What It Can Do
+
+**Perceive** — DINOv2 (vision), CLIP (scenes), Whisper (audio), MiniLM (text) → shared embedding space
+
+**Remember** — 7-slot working memory, Hopfield associative memory, personal knowledge graph, persistent spiking brain weights
+
+**Reason** — World model predictions, knowledge graph traversal, spiking chain recall through learned associations
+
+**Dream** — Imagination chains with surprise-weighted learning. Sleep consolidation (NREM replay + REM noise + structural pruning)
+
+**Learn** — From YouTube videos (triple extraction → sequential STDP), from conversation (neuromodulator-driven), from perception (online gradient InfoNCE)
+
+**Talk** — Emotion-aware companion dialogue. Neuromodulators (dopamine, acetylcholine, norepinephrine, serotonin) shape personality in real-time. Brain associations guide LLM responses.
+
+## API
+
+60+ endpoints. Key ones:
+
+| Endpoint | Method | What it does |
+|----------|--------|-------------|
+| `/api/brain/learn/academic` | POST | Learn from YouTube video (extract triples, STDP encode) |
+| `/api/brain/dialogue/grounded` | POST | Conversation with spiking brain associations |
+| `/api/brain/spiking/status` | GET | Per-region spike rates, neuromodulator levels |
+| `/api/brain/watch` | POST | Process image → visual cortex |
+| `/api/listen/process` | POST | Process audio → auditory cortex |
+| `/api/brain/dream` | POST | Generate imagination chain |
+| `/api/companion/safety` | GET | Caregiver safety alerts |
+
+Full reference: [docs/API.md](docs/API.md)
 
 ## Current Scale
 
 | Metric | Value |
 |--------|-------|
+| Spiking neurons | 2,000,000 |
+| Synaptic connections | 2,000,000,000 |
+| Brain regions | 10 |
+| Neuromodulators | 4 (DA, ACh, NE, 5-HT) |
 | Training pairs learned | 2,086,394 |
-| Concept vocabulary | 865+ categories |
-| Knowledge graph edges | 6,347 |
-| TorchScript models | 8 (1.15 GB total) |
+| Knowledge graph edges | 6,347+ |
+| TorchScript models | 8 |
 | API endpoints | 60+ |
-| Cortex experiments | 23,000+ |
 
 ## License
 
