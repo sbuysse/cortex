@@ -2581,11 +2581,11 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             // If lock fails (tick is running), skip — query gets picked up next tick
         }
 
-        // Enqueue recall — NO brain lock needed, separate mutex
-        *brain.recall_queue.lock().unwrap() = Some(message.clone());
-
-        // Read snapshot from SEPARATE mutex — never contends with tick thread
+        // Read snapshot FIRST (from previous query's recall), THEN enqueue new recall
         let snapshot = brain.spiking_snapshot.lock().unwrap().clone();
+
+        // Enqueue this query for next recall cycle
+        *brain.recall_queue.lock().unwrap() = Some(message.clone());
 
         // Match brain's output embedding against LEARNED concepts ONLY.
         // No audio codebook labels — only knowledge from video transcripts.
