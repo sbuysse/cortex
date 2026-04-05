@@ -13,6 +13,10 @@ tracing = { workspace = true }
 rand = { workspace = true }
 bincode = "1"
 memmap2 = "0.9"
-tch = "0.23"
+tch = { version = "0.23", optional = true }
+
+[features]
+default = []
+gpu = ["tch"]
 
 [dev-dependencies]

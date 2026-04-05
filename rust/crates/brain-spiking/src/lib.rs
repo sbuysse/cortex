@@ -1,5 +1,6 @@
 pub mod config;
 pub mod concepts;
+#[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod knowledge;
 pub mod neuromodulation;
