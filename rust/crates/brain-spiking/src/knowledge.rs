@@ -1,17 +1,16 @@
-use crate::concepts::{CellAssembly, ConceptRegistry, Triple};
+use crate::concepts::{ConceptRegistry, Triple};
 use crate::network::SpikingNetwork;
 
-/// Knowledge engine: learns triples via sequential STDP, recalls via chain propagation.
-/// Uses a dedicated "concept region" in the spiking network where cell assemblies live.
+/// Knowledge engine: concept-level association matrix.
+/// Learns triples INSTANTLY by strengthening directed edges between concepts.
+/// Recalls by BFS through the association graph — no neuron simulation needed.
 pub struct KnowledgeEngine {
-    /// Maps concept strings to neuron populations.
     pub registry: ConceptRegistry,
-    /// Which region in the network holds concept assemblies.
     pub concept_region: usize,
-    /// Spike current for stimulating a cell assembly.
     stim_current: f32,
-    /// Number of STDP repetitions per triple during learning.
-    learn_reps: usize,
+    /// Concept-to-concept association weights.
+    /// Key: (from_concept_id, to_concept_id), Value: weight (0.0 to 1.0).
+    associations: std::collections::HashMap<(usize, usize), f32>,
 }
 
 impl KnowledgeEngine {
@@ -20,151 +19,124 @@ impl KnowledgeEngine {
             registry: ConceptRegistry::new(region_neurons, assembly_size),
             concept_region,
             stim_current: 5.0,
-            learn_reps: 2,
+            associations: std::collections::HashMap::new(),
         }
     }
 
-    /// Learn a triple: present subject → relation → object sequentially.
-    /// STDP strengthens the directional chain S→R→O.
-    pub fn learn_triple(&mut self, net: &mut SpikingNetwork, triple: &Triple) {
-        // Get or create cell assemblies for each concept
-        let s_asm = match self.registry.get_or_create(&triple.subject) {
-            Some((a, _)) => a,
-            None => return,
-        };
-        let r_asm = match self.registry.get_or_create(&triple.relation) {
-            Some((a, _)) => a,
-            None => return,
-        };
-        let o_asm = match self.registry.get_or_create(&triple.object) {
-            Some((a, _)) => a,
-            None => return,
-        };
-
-        let region = self.concept_region;
-        let current = self.stim_current;
-
-        // Repeat for STDP consolidation
-        for _ in 0..self.learn_reps {
-            // Reset neurons between reps
-            net.region_mut(region).neurons_mut().reset();
-
-            // Phase 1: Activate subject assembly (20 steps)
-            for _ in 0..10 {
-                for idx in s_asm.neuron_range() {
-                    net.inject_current(region, idx, current);
-                }
-                net.step_selective(&[region]);
-            }
-
-            // Phase 2: Activate relation assembly (20 steps)
-            // Subject neurons are still decaying — STDP captures the S→R transition
-            for _ in 0..10 {
-                for idx in r_asm.neuron_range() {
-                    net.inject_current(region, idx, current);
-                }
-                net.step_selective(&[region]);
-            }
-
-            // Phase 3: Activate object assembly (20 steps)
-            // Relation neurons decaying — STDP captures R→O transition
-            for _ in 0..10 {
-                for idx in o_asm.neuron_range() {
-                    net.inject_current(region, idx, current);
-                }
-                net.step_selective(&[region]);
-            }
-
-            // Let activity settle (10 steps, no input)
-            for _ in 0..10 {
-                net.step_selective(&[region]);
-            }
-        }
+    /// Get concept ID from assembly.
+    fn concept_id(asm_start: usize) -> usize {
+        asm_start / 100
     }
 
-    /// Recall a chain starting from a concept.
-    /// Activates the start concept, then traces which populations activate in sequence.
-    /// Returns an ordered list of (concept_name, activation_strength).
-    pub fn recall_chain(&self, net: &mut SpikingNetwork, query: &str, max_hops: usize) -> Vec<(String, usize)> {
-        // Find ALL concepts that share words with the query
+    /// Learn a triple: INSTANT — just update the association matrix.
+    pub fn learn_triple(&mut self, _net: &mut SpikingNetwork, triple: &Triple) {
+        let s_id = match self.registry.get_or_create(&triple.subject) {
+            Some((a, _)) => Self::concept_id(a.start),
+            None => return,
+        };
+        let r_id = match self.registry.get_or_create(&triple.relation) {
+            Some((a, _)) => Self::concept_id(a.start),
+            None => return,
+        };
+        let o_id = match self.registry.get_or_create(&triple.object) {
+            Some((a, _)) => Self::concept_id(a.start),
+            None => return,
+        };
+
+        // Strengthen directed associations
+        self.strengthen(s_id, r_id, 0.8);  // subject → relation
+        self.strengthen(r_id, o_id, 0.8);  // relation → object
+        self.strengthen(s_id, o_id, 0.4);  // subject → object (shortcut)
+    }
+
+    fn strengthen(&mut self, from: usize, to: usize, delta: f32) {
+        let entry = self.associations.entry((from, to)).or_insert(0.0);
+        *entry = (*entry + delta).min(1.0);
+    }
+
+    /// Recall: BFS through the association graph from matching concepts.
+    /// INSTANT — no neuron simulation.
+    pub fn recall_chain(&self, _net: &mut SpikingNetwork, query: &str, max_hops: usize) -> Vec<(String, usize)> {
         let query_words: Vec<&str> = query.split_whitespace()
             .filter(|w| w.len() > 3)
             .collect();
 
-        // Collect matching concepts to activate simultaneously
-        let mut start_assemblies: Vec<(String, CellAssembly)> = Vec::new();
+        // Find concepts matching query words
+        let mut start_ids: Vec<usize> = Vec::new();
         for name in self.registry.concept_names() {
             let name_lower = name.to_lowercase();
             for &word in &query_words {
                 if name_lower.contains(word) || word.contains(&name_lower) {
                     if let Some(asm) = self.registry.get(name) {
-                        start_assemblies.push((name.to_string(), asm.clone()));
+                        start_ids.push(Self::concept_id(asm.start));
                         break;
                     }
                 }
             }
         }
 
-        if start_assemblies.is_empty() {
-            tracing::info!("Chain recall: no concepts match query '{}'", query);
+        if start_ids.is_empty() {
             return vec![];
         }
-        tracing::info!("Chain recall: {} concepts match query '{}': {:?}",
-            start_assemblies.len(), query,
-            start_assemblies.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
 
-        let region = self.concept_region;
-        let current = self.stim_current;
+        // BFS through association graph
+        let mut seen: std::collections::HashSet<usize> = start_ids.iter().copied().collect();
+        let mut result: Vec<(String, usize)> = Vec::new();
+        let mut frontier = start_ids;
 
-        // Reset all neurons for clean recall
-        net.region_mut(region).neurons_mut().reset();
+        for _hop in 0..max_hops {
+            let mut next: Vec<(usize, f32)> = Vec::new();
 
-        // Inject ALL matching concepts simultaneously
-        let start_names: std::collections::HashSet<String> = start_assemblies.iter()
-            .map(|(n, _)| n.clone()).collect();
-        for _ in 0..10 {
-            for (_, asm) in &start_assemblies {
-                for idx in asm.neuron_range() {
-                    net.inject_current(region, idx, current);
-                }
-            }
-            net.step_selective(&[region]);
-        }
-
-        // Collect ALL concepts that activate during propagation (not just top-1)
-        let mut all_activated: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
-        // Run 50 steps of free propagation — collect everything that fires
-        for _ in 0..50 {
-            net.step_selective(&[region]);
-            for &idx in net.region(region).last_spikes() {
-                if let Some(concept) = self.registry.neuron_to_concept(idx) {
-                    if !start_names.contains(concept) {
-                        *all_activated.entry(concept.to_string()).or_insert(0) += 1;
+            for &src_id in &frontier {
+                for (&(from, to), &weight) in &self.associations {
+                    if from == src_id && !seen.contains(&to) && weight > 0.1 {
+                        next.push((to, weight));
                     }
                 }
             }
+
+            if next.is_empty() { break; }
+
+            next.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            next.truncate(5);
+
+            frontier.clear();
+            for (cid, weight) in &next {
+                seen.insert(*cid);
+                frontier.push(*cid);
+                if let Some(name) = self.id_to_name(*cid) {
+                    result.push((name, (*weight * 100.0) as usize));
+                }
+            }
         }
 
-        // Sort by activation strength, return all above threshold
-        let mut chain: Vec<(String, usize)> = all_activated.into_iter()
-            .filter(|(_, count)| *count >= 2)
-            .collect();
-        chain.sort_by(|a, b| b.1.cmp(&a.1));
-        chain.truncate(10); // top 10 associations
-
-        chain
+        result.truncate(10);
+        result
     }
 
-    /// Format recalled associations as structured knowledge for the LLM.
-    pub fn chain_to_knowledge(query: &str, chain: &[(String, usize)]) -> String {
-        if chain.is_empty() {
-            return String::new();
+    /// Reverse lookup: concept ID → name.
+    fn id_to_name(&self, concept_id: usize) -> Option<String> {
+        for name in self.registry.concept_names() {
+            if let Some(asm) = self.registry.get(name) {
+                if Self::concept_id(asm.start) == concept_id {
+                    return Some(name.to_string());
+                }
+            }
         }
+        None
+    }
 
+    /// Format recalled associations as structured knowledge.
+    pub fn chain_to_knowledge(query: &str, chain: &[(String, usize)]) -> String {
+        if chain.is_empty() { return String::new(); }
         let concepts: Vec<String> = chain.iter()
             .map(|(c, strength)| format!("{c} (strength: {strength})"))
             .collect();
         format!("{query} is associated with: {}", concepts.join(", "))
+    }
+
+    /// Number of learned associations.
+    pub fn num_associations(&self) -> usize {
+        self.associations.len()
     }
 }
