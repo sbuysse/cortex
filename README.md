@@ -75,6 +75,43 @@ Query → Fuzzy concept matching → Activate matching cell assemblies
   → Chain of associated concepts returned
 ```
 
+## Experiment: Learning TurboQuant from a YouTube Video
+
+To validate the architecture, we taught Cortex about [TurboQuant](https://arxiv.org/abs/2504.19874) — a quantization method published after the LLM's training cutoff. The LLM alone cannot answer questions about it.
+
+**Step 1: Ask the raw LLM (no Cortex)**
+```
+Q: "How does TurboQuant reduce memory usage?"
+A: "I don't have specific knowledge about TurboQuant..."
+```
+
+**Step 2: Teach Cortex by watching a YouTube video**
+```bash
+curl -X POST /api/brain/learn/academic \
+  -d '{"query": "https://www.youtube.com/watch?v=7YVrb3-ABYE", "topic": "turboquant"}'
+# → 53 concepts extracted, 27 triples learned via STDP
+```
+
+The system extracts triples like `(turboquant, compresses, cache systems)` and `(turboquant, is, short-term memory models)` from the transcript, then encodes each as a sequential STDP pattern in cell assemblies. Learning takes ~45 minutes at 2B connections (90 seconds per triple × 27 triples).
+
+**Step 3: Ask Cortex**
+```
+Q: "How does TurboQuant reduce memory usage?"
+
+Brain associations (from STDP recall, strength scores):
+  - cache systems like large (144)
+  - short-term memory models (143)
+  - total game changer (145)
+  - points mostly along one axis (144)
+
+A: "TurboQuant appears to focus on efficient memory management,
+    possibly through its cache systems and short-term memory models,
+    which are designed to optimize the use of available resources
+    without compromising performance."
+```
+
+The LLM now answers using knowledge from the video — "cache systems" and "short-term memory models" come from the brain's STDP-learned associations, not from the LLM's training data. The spiking brain decides what to recall; the LLM turns it into language.
+
 ## Installation
 
 ### Prerequisites
