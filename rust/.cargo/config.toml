@@ -1,6 +1,6 @@
 [build]
-## Uncomment and adjust if libtorch is in a non-standard location:
-# rustflags = ["-L", "/path/to/local/lib"]
+# Enable native CPU features (AVX2/AVX-512) for SIMD auto-vectorization
+rustflags = ["-C", "target-cpu=native"]
 
 [env]
 LIBTORCH_USE_PYTORCH = "1"

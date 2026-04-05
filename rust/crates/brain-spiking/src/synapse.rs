@@ -134,15 +134,60 @@ impl SynapseCSR {
     /// Deliver spikes: for each fired neuron, add weighted current to targets.
     /// Clamps SYNAPTIC input per neuron to prevent activity cascades.
     /// External input (from encoders via inject_current) is NOT clamped.
+    ///
+    /// Optimized: sorts fired neurons for sequential CSR access,
+    /// prefetches next row while processing current one.
     pub fn deliver_spikes(&self, fired: &[usize], current_buf: &mut [f32]) {
-        // Accumulate synaptic current in a separate buffer, then clamp before adding
+        if fired.is_empty() { return; }
+
         let n = current_buf.len();
         let mut synaptic = vec![0.0f32; n];
 
-        for &src in fired {
+        // Sort fired neurons by index — sequential CSR row_ptr access
+        let mut sorted_fired: Vec<usize> = fired.to_vec();
+        sorted_fired.sort_unstable();
+
+        for (fi, &src) in sorted_fired.iter().enumerate() {
             let start = self.row_ptr[src] as usize;
             let end = self.row_ptr[src + 1] as usize;
+
+            // Prefetch next neuron's CSR data into cache while processing current
+            if fi + 1 < sorted_fired.len() {
+                let next_src = sorted_fired[fi + 1];
+                let next_start = self.row_ptr[next_src] as usize;
+                if next_start < self.col_idx.len() {
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        core::arch::x86_64::_mm_prefetch(
+                            self.col_idx.as_ptr().add(next_start) as *const i8,
+                            core::arch::x86_64::_MM_HINT_T0);
+                        core::arch::x86_64::_mm_prefetch(
+                            self.weights.as_ptr().add(next_start) as *const i8,
+                            core::arch::x86_64::_MM_HINT_T0);
+                    }
+                    #[cfg(not(target_arch = "x86_64"))]
+                    {
+                        // Fallback: volatile read pulls into cache
+                        unsafe { let _ = std::ptr::read_volatile(&self.col_idx[next_start]); }
+                    }
+                }
+            }
+
+            // Process row with intra-row prefetching (4 cache lines = 64 entries ahead)
+            const PREFETCH_DISTANCE: usize = 64;
             for i in start..end {
+                // Prefetch ahead within this row
+                if i + PREFETCH_DISTANCE < end {
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        core::arch::x86_64::_mm_prefetch(
+                            self.col_idx.as_ptr().add(i + PREFETCH_DISTANCE) as *const i8,
+                            core::arch::x86_64::_MM_HINT_T0);
+                        core::arch::x86_64::_mm_prefetch(
+                            self.weights.as_ptr().add(i + PREFETCH_DISTANCE) as *const i8,
+                            core::arch::x86_64::_MM_HINT_T0);
+                    }
+                }
                 let tgt = self.col_idx[i] as usize;
                 let w = weight_from_i16(self.weights[i]);
                 synaptic[tgt] += w;
@@ -150,7 +195,6 @@ impl SynapseCSR {
         }
 
         // Clamp synaptic drive per neuron — prevents cascade.
-        // External current (already in current_buf from inject_current) passes through unclamped.
         const MAX_SYNAPTIC_DRIVE: f32 = 0.5;
         for i in 0..n {
             if synaptic[i] != 0.0 {
