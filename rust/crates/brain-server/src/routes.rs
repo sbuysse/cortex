@@ -2587,27 +2587,13 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         // Enqueue this query for next recall cycle
         *brain.recall_queue.lock().unwrap() = Some(message.clone());
 
-        // Match brain's output embedding against LEARNED concepts ONLY.
-        // No audio codebook labels — only knowledge from video transcripts.
-        // The brain decides WHAT to recall. We translate spikes → words.
-        let assoc_concepts: Vec<String> = if snapshot.has_data && !snapshot.last_association_embedding.is_empty() {
-            let emb = &snapshot.last_association_embedding;
-            let learned = brain.learned_concepts.lock().unwrap();
-            if !learned.is_empty() {
-                let mut scored: Vec<(&str, f32)> = learned.iter()
-                    .map(|(label, lemb)| {
-                        let sim: f32 = emb.iter().zip(lemb.iter()).map(|(a, b)| a * b).sum();
-                        (label.as_str(), sim)
-                    })
-                    .collect();
-                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                scored.into_iter()
-                    .take(15)
-                    .filter(|(_, sim)| *sim > 0.01)
-                    .map(|(label, _)| label.to_string())
-                    .collect()
-            } else { vec![] }
-        } else { vec![] };
+        // Brain associations come from chain recall (associated_labels in snapshot).
+        // The chain recall traces STDP-strengthened pathways and returns concept names.
+        let assoc_concepts: Vec<String> = if snapshot.has_data {
+            snapshot.associated_labels.clone()
+        } else {
+            vec![]
+        };
 
         // Build personality tone from neuromodulators (try_lock — skip if busy)
         let mut tone_parts = Vec::new();
