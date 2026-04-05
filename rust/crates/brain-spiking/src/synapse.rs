@@ -141,7 +141,14 @@ impl SynapseCSR {
         if fired.is_empty() { return; }
 
         let n = current_buf.len();
-        let mut synaptic = vec![0.0f32; n];
+        // Reuse a thread-local buffer to avoid 2MB allocation per step
+        thread_local! {
+            static SYNAPTIC_BUF: std::cell::RefCell<Vec<f32>> = std::cell::RefCell::new(Vec::new());
+        }
+        SYNAPTIC_BUF.with(|buf| {
+        let mut synaptic = buf.borrow_mut();
+        synaptic.resize(n, 0.0);
+        synaptic.fill(0.0);
 
         // Sort fired neurons by index — sequential CSR row_ptr access
         let mut sorted_fired: Vec<usize> = fired.to_vec();
@@ -201,5 +208,6 @@ impl SynapseCSR {
                 current_buf[i] += synaptic[i].clamp(-MAX_SYNAPTIC_DRIVE, MAX_SYNAPTIC_DRIVE);
             }
         }
+        }); // end SYNAPTIC_BUF.with
     }
 }

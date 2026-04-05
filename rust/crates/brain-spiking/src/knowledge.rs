@@ -20,7 +20,7 @@ impl KnowledgeEngine {
             registry: ConceptRegistry::new(region_neurons, assembly_size),
             concept_region,
             stim_current: 5.0,
-            learn_reps: 3,
+            learn_reps: 2,
         }
     }
 
@@ -50,7 +50,7 @@ impl KnowledgeEngine {
             net.region_mut(region).neurons_mut().reset();
 
             // Phase 1: Activate subject assembly (20 steps)
-            for _ in 0..20 {
+            for _ in 0..10 {
                 for idx in s_asm.neuron_range() {
                     net.inject_current(region, idx, current);
                 }
@@ -59,7 +59,7 @@ impl KnowledgeEngine {
 
             // Phase 2: Activate relation assembly (20 steps)
             // Subject neurons are still decaying — STDP captures the S→R transition
-            for _ in 0..20 {
+            for _ in 0..10 {
                 for idx in r_asm.neuron_range() {
                     net.inject_current(region, idx, current);
                 }
@@ -68,7 +68,7 @@ impl KnowledgeEngine {
 
             // Phase 3: Activate object assembly (20 steps)
             // Relation neurons decaying — STDP captures R→O transition
-            for _ in 0..20 {
+            for _ in 0..10 {
                 for idx in o_asm.neuron_range() {
                     net.inject_current(region, idx, current);
                 }
@@ -122,7 +122,7 @@ impl KnowledgeEngine {
         // Inject ALL matching concepts simultaneously
         let start_names: std::collections::HashSet<String> = start_assemblies.iter()
             .map(|(n, _)| n.clone()).collect();
-        for _ in 0..20 {
+        for _ in 0..10 {
             for (_, asm) in &start_assemblies {
                 for idx in asm.neuron_range() {
                     net.inject_current(region, idx, current);

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod concepts;
+pub mod gpu;
 pub mod knowledge;
 pub mod neuromodulation;
 pub mod network;

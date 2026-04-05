@@ -13,5 +13,6 @@ tracing = { workspace = true }
 rand = { workspace = true }
 bincode = "1"
 memmap2 = "0.9"
+tch = "0.23"
 
 [dev-dependencies]

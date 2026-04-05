@@ -1,4 +1,5 @@
 use crate::config::RegionConfig;
+use crate::gpu::GpuSynapses;
 use crate::neuron::NeuronArray;
 use crate::synapse::{SynapseBuilder, SynapseCSR, weight_from_i16, weight_to_i16};
 use crate::plasticity::{PlasticityParams, update_stdp, update_eligibility};
@@ -8,6 +9,8 @@ pub struct BrainRegion {
     config: RegionConfig,
     neurons: NeuronArray,
     synapses: Option<SynapseCSR>,
+    /// GPU-accelerated synapse matrix (if CUDA available).
+    gpu_synapses: Option<GpuSynapses>,
     builder: Option<SynapseBuilder>,
     last_spikes: Vec<usize>,
     /// Last spike time per neuron (u32::MAX = never spiked).
@@ -26,6 +29,7 @@ impl BrainRegion {
         let neurons = NeuronArray::new(n, &config.neuron_params);
         Self {
             builder: Some(SynapseBuilder::new(n)),
+            gpu_synapses: None,
             last_spike_time: vec![u32::MAX; n],
             step_count: 0,
             plasticity: PlasticityParams::default(),
@@ -50,10 +54,20 @@ impl BrainRegion {
         }
     }
 
-    /// Freeze connectivity from COO to CSR. Must be called before stepping.
+    /// Freeze connectivity from COO to CSR. Creates GPU version if CUDA available.
     pub fn finalize(&mut self) {
         if let Some(builder) = self.builder.take() {
-            self.synapses = Some(builder.freeze());
+            let csr = builder.freeze();
+            // Try to create GPU version for fast spike delivery
+            if csr.num_synapses() > 10000 {
+                let gpu = GpuSynapses::from_csr(&csr);
+                if gpu.is_cuda() {
+                    tracing::info!("Region '{}': GPU spike delivery enabled ({} synapses)",
+                        self.config.name, csr.num_synapses());
+                    self.gpu_synapses = Some(gpu);
+                }
+            }
+            self.synapses = Some(csr);
         }
     }
 
@@ -79,8 +93,10 @@ impl BrainRegion {
             self.last_spikes.push(idx);
         }
 
-        // 3. Deliver spikes through internal synapses
-        if let Some(ref synapses) = self.synapses {
+        // 3. Deliver spikes through internal synapses (GPU if available, CPU fallback)
+        if let Some(ref gpu) = self.gpu_synapses {
+            gpu.deliver_spikes(&self.last_spikes, &mut self.neurons.i_ext);
+        } else if let Some(ref synapses) = self.synapses {
             synapses.deliver_spikes(&self.last_spikes, &mut self.neurons.i_ext);
         }
 
