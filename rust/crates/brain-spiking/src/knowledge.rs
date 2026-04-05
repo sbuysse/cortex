@@ -131,61 +131,40 @@ impl KnowledgeEngine {
             net.step_selective(&[region]);
         }
 
-        // Now let activity propagate — no more input
-        let mut chain: Vec<(String, usize)> = Vec::new();
-        let mut seen: std::collections::HashSet<String> = start_names;
+        // Collect ALL concepts that activate during propagation (not just top-1)
+        let mut all_activated: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
-        for _hop in 0..max_hops {
-            // Run 30 steps of free propagation
-            let mut population_spikes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
-            for _ in 0..30 {
-                net.step_selective(&[region]);
-                // Count spikes per concept population
-                for &idx in net.region(region).last_spikes() {
-                    if let Some(concept) = self.registry.neuron_to_concept(idx) {
-                        if !seen.contains(concept) {
-                            *population_spikes.entry(concept.to_string()).or_insert(0) += 1;
-                        }
+        // Run 50 steps of free propagation — collect everything that fires
+        for _ in 0..50 {
+            net.step_selective(&[region]);
+            for &idx in net.region(region).last_spikes() {
+                if let Some(concept) = self.registry.neuron_to_concept(idx) {
+                    if !start_names.contains(concept) {
+                        *all_activated.entry(concept.to_string()).or_insert(0) += 1;
                     }
                 }
-            }
-
-            // Find the most activated new concept
-            if let Some((best_concept, spike_count)) = population_spikes.into_iter()
-                .max_by_key(|(_, count)| *count)
-            {
-                if spike_count >= 3 { // minimum activation threshold
-                    chain.push((best_concept.clone(), spike_count));
-                    seen.insert(best_concept.clone());
-
-                    // Stimulate the new concept to continue the chain
-                    if let Some(asm) = self.registry.get(&best_concept) {
-                        for _ in 0..10 {
-                            for idx in asm.neuron_range() {
-                                net.inject_current(region, idx, current * 0.5);
-                            }
-                            net.step_selective(&[region]);
-                        }
-                    }
-                } else {
-                    break; // activation too weak — chain ends
-                }
-            } else {
-                break; // no new concept activated
             }
         }
+
+        // Sort by activation strength, return all above threshold
+        let mut chain: Vec<(String, usize)> = all_activated.into_iter()
+            .filter(|(_, count)| *count >= 2)
+            .collect();
+        chain.sort_by(|a, b| b.1.cmp(&a.1));
+        chain.truncate(10); // top 10 associations
 
         chain
     }
 
-    /// Format a recalled chain as structured knowledge for the LLM.
+    /// Format recalled associations as structured knowledge for the LLM.
     pub fn chain_to_knowledge(query: &str, chain: &[(String, usize)]) -> String {
         if chain.is_empty() {
             return String::new();
         }
 
-        let concepts: Vec<&str> = chain.iter().map(|(c, _)| c.as_str()).collect();
-        format!("{query} relates to: {}", concepts.join(" → "))
+        let concepts: Vec<String> = chain.iter()
+            .map(|(c, strength)| format!("{c} (strength: {strength})"))
+            .collect();
+        format!("{query} is associated with: {}", concepts.join(", "))
     }
 }

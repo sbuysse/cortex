@@ -170,22 +170,27 @@ pub fn extract_triples_with_topic(sentence: &str, topic: &str) -> Vec<Triple> {
         let clean = lower.trim_matches(|c: char| !c.is_alphanumeric());
 
         if relation_verbs.contains(&clean.as_ref()) && i > 0 && i < words.len() - 1 {
-            // Subject: words before the verb (last 1-3 non-trivial words)
+            let stop_words = ["the", "a", "an", "of", "in", "on", "at", "to",
+                "for", "by", "with", "from", "this", "that", "it", "its",
+                "and", "or", "but", "so", "if", "as", "is", "was", "are",
+                "very", "really", "just", "well", "also", "even", "about"];
+
+            // Subject: words before the verb (last 1-3 meaningful words)
             let subject_words: Vec<&str> = words[..i].iter()
                 .rev()
+                .filter(|w| w.len() > 2 && !stop_words.contains(&w.to_lowercase().as_str()))
                 .take(3)
-                .filter(|w| w.len() > 2)
                 .copied()
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
                 .collect();
 
-            // Object: words after the verb (first 1-3 non-trivial words)
+            // Object: words after the verb (first 1-4 meaningful words)
             let object_words: Vec<&str> = words[i+1..]
                 .iter()
+                .filter(|w| w.len() > 2 && !stop_words.contains(&w.to_lowercase().as_str()))
                 .take(4)
-                .filter(|w| w.len() > 1)
                 .copied()
                 .collect();
 
