@@ -48,6 +48,8 @@ pub struct BrainSnapshot {
     pub has_data: bool,
     /// Concepts activated by spiking propagation (emergent associations).
     pub spiking_associations: Vec<(String, usize)>,
+    /// Concepts predicted via chain propagation (window 2 only).
+    pub predicted_associations: Vec<(String, usize)>,
     /// Recall mode used: "focused", "broad", "default", or empty.
     pub recall_mode: String,
 }
@@ -328,6 +330,7 @@ impl SpikingBrain {
                 associated_labels: labels,
                 has_data: true,
                 spiking_associations: Vec::new(),
+                predicted_associations: Vec::new(),
                 recall_mode: String::new(),
             };
             // Store the formatted knowledge in associated_labels[0] as a special entry
@@ -345,6 +348,7 @@ impl SpikingBrain {
                 associated_labels: recall.associated_labels,
                 has_data: true,
                 spiking_associations: Vec::new(),
+                predicted_associations: Vec::new(),
                 recall_mode: String::new(),
             };
         }
@@ -466,8 +470,8 @@ impl SpikingBrain {
     }
 
     /// Fire seed concepts into the spiking network and collect activated concepts.
-    /// Returns (activated_concepts, mode_used). Resets neurons after propagation.
-    pub fn run_spiking_recall(&mut self) -> Option<(Vec<(String, usize)>, String)> {
+    /// Returns (direct_associations, predicted_associations, mode_used). Resets neurons after propagation.
+    pub fn run_spiking_recall(&mut self) -> Option<(Vec<(String, usize)>, Vec<(String, usize)>, String)> {
         let (seeds, mode) = self.knowledge.take_spiking_seeds();
         tracing::info!("Spiking recall: {} seeds, mode={}", seeds.len(), mode);
         if seeds.is_empty() {
@@ -500,16 +504,28 @@ impl SpikingBrain {
             }
         }
 
-        // Propagate for 30 steps through association cortex only (with raised clamp for imprinted weights)
-        let mut fired_in_assoc: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-        for _step in 0..30 {
-            // Step only the association cortex with 1.5 clamp (vs default 0.5)
-            // This lets imprinted weights (up to 1.0) drive neurons properly
+        // Window 1 (steps 1-10): Direct associations
+        let mut fired_window1: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for _step in 0..10 {
             let spikes = self.network.region_mut(assoc_region).step_with_clamp(1.5);
             for &neuron_idx in spikes {
-                *fired_in_assoc.entry(neuron_idx).or_insert(0) += 1;
+                *fired_window1.entry(neuron_idx).or_insert(0) += 1;
             }
         }
+
+        // Window 2 (steps 11-30): Chain predictions
+        let mut fired_window2: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for _step in 0..20 {
+            let spikes = self.network.region_mut(assoc_region).step_with_clamp(1.5);
+            for &neuron_idx in spikes {
+                *fired_window2.entry(neuron_idx).or_insert(0) += 1;
+            }
+        }
+
+        // Combine for total activation
+        let mut fired_in_assoc: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for (k, v) in &fired_window1 { *fired_in_assoc.entry(*k).or_insert(0) += v; }
+        for (k, v) in &fired_window2 { *fired_in_assoc.entry(*k).or_insert(0) += v; }
 
         // Scan concept assemblies for activation
         let mut activated: Vec<(String, usize)> = Vec::new();
@@ -546,8 +562,29 @@ impl SpikingBrain {
             !noise_concepts.contains(&lower.as_str()) && lower.len() > 3
         });
 
-        activated.sort_by(|a, b| b.1.cmp(&a.1));
-        activated.truncate(10);
+        // Classify concepts into direct (window 1) vs predicted (window 2 only)
+        let mut direct: Vec<(String, usize)> = Vec::new();
+        let mut predicted: Vec<(String, usize)> = Vec::new();
+
+        for (name, strength) in &activated {
+            let asm = self.knowledge.registry.get(name);
+            let in_window1 = if let Some(asm) = asm {
+                (asm.start..asm.start + asm.size).any(|n| fired_window1.contains_key(&n))
+            } else {
+                false
+            };
+
+            if in_window1 {
+                direct.push((name.clone(), *strength));
+            } else {
+                predicted.push((name.clone(), *strength));
+            }
+        }
+
+        direct.sort_by(|a, b| b.1.cmp(&a.1));
+        predicted.sort_by(|a, b| b.1.cmp(&a.1));
+        direct.truncate(8);
+        predicted.truncate(5);
 
         // Reset neurons to avoid interference with future ticks
         for i in 0..self.network.num_regions() {
@@ -557,10 +594,10 @@ impl SpikingBrain {
         // Restore neuromodulators
         self.network.modulators = saved_mods;
 
-        tracing::info!("Spiking recall ({} mode): {} seeds fired, {} concepts activated",
-            mode, seeds.len(), activated.len());
+        tracing::info!("Spiking recall ({} mode): {} seeds fired, {} direct + {} predicted concepts",
+            mode, seeds.len(), direct.len(), predicted.len());
 
-        Some((activated, mode))
+        Some((direct, predicted, mode))
     }
 
     /// Strengthen CSR synaptic weights between two concept assemblies.
