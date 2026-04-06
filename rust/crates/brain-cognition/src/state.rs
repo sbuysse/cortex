@@ -278,9 +278,12 @@ impl BrainState {
                             sb.knowledge.learn_triple_with_topic(triple, topic, *seq_idx);
                             imprinted += sb.imprint_synapses(triple);
                         }
+                        // Chain imprint consecutive triples via STDP
+                        let chain_count = sb.imprint_chain_stdp(&triples);
                         sb.knowledge.flush();
                         let elapsed = t0.elapsed().as_secs_f32();
-                        tracing::info!("Learned {} triples in {:.3}s, imprinted {} synapses", count, elapsed, imprinted);
+                        tracing::info!("Learned {} triples in {:.3}s, imprinted {} synapses, {} chain links",
+                            count, elapsed, imprinted, chain_count);
                         drop(sb);
                         continue;
                     }

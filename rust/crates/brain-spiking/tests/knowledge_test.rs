@@ -186,3 +186,33 @@ fn test_synaptic_imprinting() {
     println!("Imprinted {} synapses at scale=0.01", strengthened);
     // At 0.01 scale the count may be small but the method should not panic
 }
+
+// ---------------------------------------------------------------------------
+// Task 2 — STDP chain imprinting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_chain_imprinting() {
+    let mut brain = brain_spiking::SpikingBrain::new(0.01, None);
+
+    let t1 = brain_spiking::Triple::new("quantization", "reduces", "precision");
+    let t2 = brain_spiking::Triple::new("lower precision", "reduces", "memory");
+    let t3 = brain_spiking::Triple::new("less memory", "enables", "larger batches");
+
+    brain.knowledge.learn_triple_with_topic(&t1, "test", 0);
+    brain.knowledge.learn_triple_with_topic(&t2, "test", 1);
+    brain.knowledge.learn_triple_with_topic(&t3, "test", 2);
+
+    brain.imprint_synapses(&t1);
+    brain.imprint_synapses(&t2);
+    brain.imprint_synapses(&t3);
+
+    let triples = vec![
+        (t1, "test".to_string(), 0i32),
+        (t2, "test".to_string(), 1i32),
+        (t3, "test".to_string(), 2i32),
+    ];
+    let chain_count = brain.imprint_chain_stdp(&triples);
+    println!("Chain imprinted {} links at scale=0.01", chain_count);
+    assert_eq!(chain_count, 2, "Should have 2 chain links for 3 consecutive triples");
+}

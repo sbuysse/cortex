@@ -129,6 +129,17 @@ impl SpikingBrain {
             tracing::info!("Imprinted {} synapses from {} loaded triples", total_imprinted, loaded_triples.len());
         }
 
+        // STDP chain imprint loaded triples
+        if !loaded_triples.is_empty() {
+            let as_tuples: Vec<(Triple, String, i32)> = loaded_triples.iter()
+                .map(|(t, seq)| (t.clone(), String::new(), *seq))
+                .collect();
+            let chain_links = brain.imprint_chain_stdp(&as_tuples);
+            if chain_links > 0 {
+                tracing::info!("STDP chain imprinted {} links from persisted triples", chain_links);
+            }
+        }
+
         brain
     }
 
@@ -170,6 +181,17 @@ impl SpikingBrain {
         }
         if total_imprinted > 0 {
             tracing::info!("Imprinted {} synapses from {} loaded triples", total_imprinted, loaded_triples.len());
+        }
+
+        // STDP chain imprint loaded triples
+        if !loaded_triples.is_empty() {
+            let as_tuples: Vec<(Triple, String, i32)> = loaded_triples.iter()
+                .map(|(t, seq)| (t.clone(), String::new(), *seq))
+                .collect();
+            let chain_links = brain.imprint_chain_stdp(&as_tuples);
+            if chain_links > 0 {
+                tracing::info!("STDP chain imprinted {} links from persisted triples", chain_links);
+            }
         }
 
         brain
@@ -627,6 +649,79 @@ impl SpikingBrain {
             total, triple.subject, triple.relation, triple.object
         );
         total
+    }
+
+    /// STDP-timed chain imprinting: for consecutive triples (by seq_index),
+    /// fire the object assembly of triple N, wait 5 steps, fire the subject
+    /// assembly of triple N+1. STDP strengthens forward connections naturally.
+    /// Returns number of chain links created.
+    pub fn imprint_chain_stdp(&mut self, triples: &[(Triple, String, i32)]) -> usize {
+        let mut ordered: Vec<&(Triple, String, i32)> = triples.iter()
+            .filter(|(_, _, seq)| *seq >= 0)
+            .collect();
+        ordered.sort_by_key(|(_, _, seq)| *seq);
+
+        if ordered.len() < 2 {
+            return 0;
+        }
+
+        let assoc_region = self.knowledge.concept_region;
+        let stim = self.knowledge.stim_current();
+        let mut chain_count = 0;
+
+        // Enable learning on association cortex for STDP
+        self.network.region_mut(assoc_region).learning_enabled = true;
+
+        for i in 0..ordered.len() - 1 {
+            let (triple_n, _, seq_n) = ordered[i];
+            let (triple_n1, _, seq_n1) = ordered[i + 1];
+
+            // Only chain consecutive seq indices
+            if *seq_n1 != *seq_n + 1 {
+                continue;
+            }
+
+            // Get assemblies: object of triple N → subject of triple N+1
+            let obj_asm = self.knowledge.registry.get(&triple_n.object).cloned();
+            let subj_asm = self.knowledge.registry.get(&triple_n1.subject).cloned();
+
+            let (obj_asm, subj_asm) = match (obj_asm, subj_asm) {
+                (Some(o), Some(s)) => (o, s),
+                _ => continue,
+            };
+
+            let region_neurons = self.network.region(assoc_region).num_neurons();
+
+            // Phase 1: Fire object assembly of triple N (pre-synaptic)
+            for neuron in obj_asm.start..(obj_asm.start + obj_asm.size).min(region_neurons) {
+                self.network.inject_current(assoc_region, neuron, stim);
+            }
+            // Run 5 steps — pre-synaptic neurons fire
+            for _ in 0..5 {
+                self.network.region_mut(assoc_region).step_with_clamp(1.5);
+            }
+
+            // Phase 2: Fire subject assembly of triple N+1 (post-synaptic)
+            for neuron in subj_asm.start..(subj_asm.start + subj_asm.size).min(region_neurons) {
+                self.network.inject_current(assoc_region, neuron, stim);
+            }
+            // Run 5 more steps — STDP fires on pre-before-post timing
+            for _ in 0..5 {
+                self.network.region_mut(assoc_region).step_with_clamp(1.5);
+            }
+
+            chain_count += 1;
+        }
+
+        // Disable learning and reset neurons (keep weight changes)
+        self.network.region_mut(assoc_region).learning_enabled = false;
+        self.network.region_mut(assoc_region).neurons_mut().reset();
+
+        if chain_count > 0 {
+            tracing::info!("STDP chain imprinted {} temporal links", chain_count);
+        }
+
+        chain_count
     }
 
     pub fn stats(&self) -> NetworkStats { self.network.stats() }
