@@ -155,6 +155,31 @@ impl BrainRegion {
         &self.last_spikes
     }
 
+    /// Advance one timestep with a custom synaptic drive clamp.
+    /// Used during spiking recall where imprinted weights need higher clamp.
+    pub fn step_with_clamp(&mut self, max_drive: f32) -> &[usize] {
+        if self.synapses.is_none() && self.builder.is_some() {
+            self.finalize();
+        }
+        let spike_output = self.neurons.step();
+        self.last_spikes.clear();
+        for idx in spike_output.iter_fired() {
+            self.last_spikes.push(idx);
+        }
+        #[cfg(feature = "gpu")]
+        if let Some(ref gpu) = self.gpu_synapses {
+            gpu.deliver_spikes(&self.last_spikes, &mut self.neurons.i_ext);
+        } else if let Some(ref synapses) = self.synapses {
+            synapses.deliver_spikes_with_clamp(&self.last_spikes, &mut self.neurons.i_ext, max_drive);
+        }
+        #[cfg(not(feature = "gpu"))]
+        if let Some(ref synapses) = self.synapses {
+            synapses.deliver_spikes_with_clamp(&self.last_spikes, &mut self.neurons.i_ext, max_drive);
+        }
+        self.step_count += 1;
+        &self.last_spikes
+    }
+
     pub fn voltage(&self, idx: usize) -> f32 { self.neurons.voltage(idx) }
     pub fn last_spikes(&self) -> &[usize] { &self.last_spikes }
     pub fn synapses_mut(&mut self) -> Option<&mut SynapseCSR> { self.synapses.as_mut() }

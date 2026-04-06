@@ -131,6 +131,12 @@ impl SynapseCSR {
         (self.row_ptr[src + 1] - self.row_ptr[src]) as usize
     }
 
+    /// Deliver spikes with a custom synaptic drive clamp.
+    /// Use `deliver_spikes` for the default 0.5 clamp.
+    pub fn deliver_spikes_with_clamp(&self, fired: &[usize], current_buf: &mut [f32], max_drive: f32) {
+        self.deliver_spikes_inner(fired, current_buf, max_drive);
+    }
+
     /// Deliver spikes: for each fired neuron, add weighted current to targets.
     /// Clamps SYNAPTIC input per neuron to prevent activity cascades.
     /// External input (from encoders via inject_current) is NOT clamped.
@@ -138,10 +144,13 @@ impl SynapseCSR {
     /// Optimized: sorts fired neurons for sequential CSR access,
     /// prefetches next row while processing current one.
     pub fn deliver_spikes(&self, fired: &[usize], current_buf: &mut [f32]) {
+        self.deliver_spikes_inner(fired, current_buf, 0.5);
+    }
+
+    fn deliver_spikes_inner(&self, fired: &[usize], current_buf: &mut [f32], max_synaptic_drive: f32) {
         if fired.is_empty() { return; }
 
         let n = current_buf.len();
-        // Reuse a thread-local buffer to avoid 2MB allocation per step
         thread_local! {
             static SYNAPTIC_BUF: std::cell::RefCell<Vec<f32>> = std::cell::RefCell::new(Vec::new());
         }
@@ -150,7 +159,6 @@ impl SynapseCSR {
         synaptic.resize(n, 0.0);
         synaptic.fill(0.0);
 
-        // Sort fired neurons by index — sequential CSR row_ptr access
         let mut sorted_fired: Vec<usize> = fired.to_vec();
         sorted_fired.sort_unstable();
 
@@ -158,7 +166,6 @@ impl SynapseCSR {
             let start = self.row_ptr[src] as usize;
             let end = self.row_ptr[src + 1] as usize;
 
-            // Prefetch next neuron's CSR data into cache while processing current
             if fi + 1 < sorted_fired.len() {
                 let next_src = sorted_fired[fi + 1];
                 let next_start = self.row_ptr[next_src] as usize;
@@ -174,16 +181,13 @@ impl SynapseCSR {
                     }
                     #[cfg(not(target_arch = "x86_64"))]
                     {
-                        // Fallback: volatile read pulls into cache
                         unsafe { let _ = std::ptr::read_volatile(&self.col_idx[next_start]); }
                     }
                 }
             }
 
-            // Process row with intra-row prefetching (4 cache lines = 64 entries ahead)
             const PREFETCH_DISTANCE: usize = 64;
             for i in start..end {
-                // Prefetch ahead within this row
                 if i + PREFETCH_DISTANCE < end {
                     #[cfg(target_arch = "x86_64")]
                     unsafe {
@@ -201,11 +205,9 @@ impl SynapseCSR {
             }
         }
 
-        // Clamp synaptic drive per neuron — prevents cascade.
-        const MAX_SYNAPTIC_DRIVE: f32 = 0.5;
         for i in 0..n {
             if synaptic[i] != 0.0 {
-                current_buf[i] += synaptic[i].clamp(-MAX_SYNAPTIC_DRIVE, MAX_SYNAPTIC_DRIVE);
+                current_buf[i] += synaptic[i].clamp(-max_synaptic_drive, max_synaptic_drive);
             }
         }
         }); // end SYNAPTIC_BUF.with

@@ -470,11 +470,12 @@ impl SpikingBrain {
             }
         }
 
-        // Propagate for 30 steps (each step ~0.2s at 2M neurons, total ~6s)
+        // Propagate for 30 steps through association cortex only (with raised clamp for imprinted weights)
         let mut fired_in_assoc: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for _step in 0..30 {
-            self.network.step();
-            let spikes = self.network.region(assoc_region).last_spikes();
+            // Step only the association cortex with 1.5 clamp (vs default 0.5)
+            // This lets imprinted weights (up to 1.0) drive neurons properly
+            let spikes = self.network.region_mut(assoc_region).step_with_clamp(1.5);
             for &neuron_idx in spikes {
                 *fired_in_assoc.entry(neuron_idx).or_insert(0) += 1;
             }
@@ -561,7 +562,7 @@ impl SpikingBrain {
     }
 
     /// Imprint a knowledge triple into the CSR synaptic weights.
-    /// Strengthens S→R (delta 0.3), R→O (delta 0.3), S→O (delta 0.15).
+    /// Strengthens S→R (delta 0.8), R→O (delta 0.8), S→O (delta 0.4).
     /// Returns total number of synapses strengthened.
     pub fn imprint_synapses(&mut self, triple: &Triple) -> usize {
         let region_id = self.knowledge.concept_region;
@@ -582,21 +583,21 @@ impl SpikingBrain {
             region_id,
             s_asm.start, s_asm.size,
             r_asm.start, r_asm.size,
-            0.3,
+            0.8,
         );
         // R → O
         total += self.strengthen_assembly_synapses(
             region_id,
             r_asm.start, r_asm.size,
             o_asm.start, o_asm.size,
-            0.3,
+            0.8,
         );
         // S → O
         total += self.strengthen_assembly_synapses(
             region_id,
             s_asm.start, s_asm.size,
             o_asm.start, o_asm.size,
-            0.15,
+            0.4,
         );
 
         tracing::info!(
