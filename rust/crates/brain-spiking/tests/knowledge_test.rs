@@ -153,3 +153,20 @@ fn test_cross_domain_recall() {
     );
     assert!(has_cross_domain, "Should reach concepts across domains, got: {:?}", names);
 }
+
+#[test]
+fn test_spiking_seeds_after_bfs() {
+    let mut engine = KnowledgeEngine::new(0, 50000, 100);
+
+    engine.learn_triple_with_topic(
+        &Triple::new("turboquant", "compresses", "kv cache"), "TurboQuant");
+    engine.learn_triple_with_topic(
+        &Triple::new("flash attention", "optimizes", "kv cache"), "FlashAttention");
+
+    let mut net = SpikingNetwork::new(NetworkConfig { regions: vec![] });
+    let _chain = engine.recall_chain_bidirectional(&mut net, "turboquant flash attention", 10);
+
+    let (seeds, mode) = engine.take_spiking_seeds();
+    assert!(!seeds.is_empty(), "Should have spiking seeds after BFS");
+    assert_eq!(mode, "broad", "Multi-topic query should trigger broad mode");
+}

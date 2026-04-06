@@ -22,6 +22,10 @@ pub struct KnowledgeEngine {
     writer: Option<BufWriter<File>>,
     /// Number of writes since the last explicit flush.
     unflushed: usize,
+    /// Concept IDs to fire into spiking network on next tick.
+    spiking_seeds: Vec<usize>,
+    /// Recall mode: "focused", "broad", or "default".
+    spiking_mode: String,
 }
 
 impl KnowledgeEngine {
@@ -34,6 +38,8 @@ impl KnowledgeEngine {
             data_dir: None,
             writer: None,
             unflushed: 0,
+            spiking_seeds: Vec::new(),
+            spiking_mode: String::new(),
         }
     }
 
@@ -193,7 +199,7 @@ impl KnowledgeEngine {
 
     /// Recall: BFS through the association graph from matching concepts.
     /// INSTANT — no neuron simulation.
-    pub fn recall_chain(&self, _net: &mut SpikingNetwork, query: &str, max_hops: usize) -> Vec<(String, usize)> {
+    pub fn recall_chain(&mut self, _net: &mut SpikingNetwork, query: &str, max_hops: usize) -> Vec<(String, usize)> {
         let query_words: Vec<&str> = query.split_whitespace()
             .filter(|w| w.len() > 3)
             .collect();
@@ -215,6 +221,9 @@ impl KnowledgeEngine {
         if start_ids.is_empty() {
             return vec![];
         }
+
+        self.spiking_seeds = start_ids.clone();
+        self.spiking_mode = "focused".to_string();
 
         // BFS through association graph
         let mut seen: std::collections::HashSet<usize> = start_ids.iter().copied().collect();
@@ -322,7 +331,7 @@ impl KnowledgeEngine {
     /// Bidirectional BFS recall: find cross-domain bridge concepts.
     /// If 2+ concept clusters found in query, BFS from both sides and boost bridge nodes.
     /// Falls back to recall_chain if fewer than 2 clusters found.
-    pub fn recall_chain_bidirectional(&self, _net: &mut SpikingNetwork, query: &str, max_hops: usize) -> Vec<(String, usize)> {
+    pub fn recall_chain_bidirectional(&mut self, _net: &mut SpikingNetwork, query: &str, max_hops: usize) -> Vec<(String, usize)> {
         // Parse query for ALL recognizable concept names (including multi-word)
         let query_lower = query.to_lowercase();
         let all_names: Vec<String> = self.registry.concept_names().into_iter().map(|s| s.to_string()).collect();
@@ -391,6 +400,24 @@ impl KnowledgeEngine {
         let mut pairs: Vec<(usize, f32)> = merged.into_iter().collect();
         pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
+        // Store seeds for spiking propagation
+        self.spiking_seeds = cluster_ids.clone();
+
+        // Determine recall mode from topic provenance
+        let mut seed_topics: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for name in &matched_names {
+            for topic in self.registry.get_topics(name) {
+                seed_topics.insert(topic);
+            }
+        }
+        self.spiking_mode = if seed_topics.len() >= 2 {
+            "broad".to_string()
+        } else if !seed_topics.is_empty() {
+            "focused".to_string()
+        } else {
+            "default".to_string()
+        };
+
         // Convert to (name, weight) and filter noise
         let noise_concepts = ["is", "are", "was", "were", "relates-to", "has", "have",
             "uses", "use", "called", "known", "means", "works",
@@ -426,5 +453,22 @@ impl KnowledgeEngine {
     /// Number of learned associations.
     pub fn num_associations(&self) -> usize {
         self.associations.len()
+    }
+
+    /// Take the pending spiking seeds (clears them). Returns (seed_concept_ids, mode).
+    pub fn take_spiking_seeds(&mut self) -> (Vec<usize>, String) {
+        let seeds = std::mem::take(&mut self.spiking_seeds);
+        let mode = std::mem::take(&mut self.spiking_mode);
+        (seeds, mode)
+    }
+
+    /// Check if spiking seeds are pending.
+    pub fn has_spiking_seeds(&self) -> bool {
+        !self.spiking_seeds.is_empty()
+    }
+
+    /// Stimulation current for spiking seed injection.
+    pub fn stim_current(&self) -> f32 {
+        self.stim_current
     }
 }
