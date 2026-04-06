@@ -500,6 +500,94 @@ impl SpikingBrain {
         Some((activated, mode))
     }
 
+    /// Strengthen CSR synaptic weights between two concept assemblies.
+    /// Returns the count of synapses that were strengthened.
+    pub fn strengthen_assembly_synapses(
+        &mut self,
+        region_id: usize,
+        src_start: usize,
+        src_size: usize,
+        tgt_start: usize,
+        tgt_size: usize,
+        delta: f32,
+    ) -> usize {
+        // Auto-finalize the region if it hasn't been yet (builder → CSR).
+        {
+            let region = self.network.region_mut(region_id);
+            if region.synapses_mut().is_none() {
+                region.finalize();
+            }
+        }
+        let synapses = match self.network.region_mut(region_id).synapses_mut() {
+            Some(s) => s,
+            None => return 0,
+        };
+        let row_len = synapses.row_ptr.len();
+        let mut count = 0usize;
+        for neuron in src_start..src_start + src_size {
+            if neuron >= row_len.saturating_sub(1) {
+                continue;
+            }
+            let row_start = synapses.row_ptr[neuron] as usize;
+            let row_end = synapses.row_ptr[neuron + 1] as usize;
+            for syn_i in row_start..row_end {
+                let tgt = synapses.col_idx[syn_i] as usize;
+                if tgt >= tgt_start && tgt < tgt_start + tgt_size {
+                    let w = synapse::weight_from_i16(synapses.weights[syn_i]);
+                    synapses.weights[syn_i] = synapse::weight_to_i16((w + delta).min(1.0));
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Imprint a knowledge triple into the CSR synaptic weights.
+    /// Strengthens S→R (delta 0.3), R→O (delta 0.3), S→O (delta 0.15).
+    /// Returns total number of synapses strengthened.
+    pub fn imprint_synapses(&mut self, triple: &Triple) -> usize {
+        let region_id = self.knowledge.concept_region;
+
+        let s_asm = self.knowledge.registry.get(&triple.subject).cloned();
+        let r_asm = self.knowledge.registry.get(&triple.relation).cloned();
+        let o_asm = self.knowledge.registry.get(&triple.object).cloned();
+
+        let (s_asm, r_asm, o_asm) = match (s_asm, r_asm, o_asm) {
+            (Some(s), Some(r), Some(o)) => (s, r, o),
+            _ => return 0,
+        };
+
+        let mut total = 0usize;
+
+        // S → R
+        total += self.strengthen_assembly_synapses(
+            region_id,
+            s_asm.start, s_asm.size,
+            r_asm.start, r_asm.size,
+            0.3,
+        );
+        // R → O
+        total += self.strengthen_assembly_synapses(
+            region_id,
+            r_asm.start, r_asm.size,
+            o_asm.start, o_asm.size,
+            0.3,
+        );
+        // S → O
+        total += self.strengthen_assembly_synapses(
+            region_id,
+            s_asm.start, s_asm.size,
+            o_asm.start, o_asm.size,
+            0.15,
+        );
+
+        tracing::info!(
+            "Imprinted {} synapses for triple ({}, {}, {})",
+            total, triple.subject, triple.relation, triple.object
+        );
+        total
+    }
+
     pub fn stats(&self) -> NetworkStats { self.network.stats() }
 
     /// Save all region synapses to disk for persistence across restarts.

@@ -170,3 +170,17 @@ fn test_spiking_seeds_after_bfs() {
     assert!(!seeds.is_empty(), "Should have spiking seeds after BFS");
     assert_eq!(mode, "broad", "Multi-topic query should trigger broad mode");
 }
+
+// ---------------------------------------------------------------------------
+// Task 1 — synaptic imprinting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_synaptic_imprinting() {
+    let mut brain = brain_spiking::SpikingBrain::new(0.01, None);
+    let triple = brain_spiking::Triple::new("alpha", "connects", "beta");
+    brain.knowledge.learn_triple_with_topic(&triple, "test");
+    let strengthened = brain.imprint_synapses(&triple);
+    println!("Imprinted {} synapses at scale=0.01", strengthened);
+    // At 0.01 scale the count may be small but the method should not panic
+}
