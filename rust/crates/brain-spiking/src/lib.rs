@@ -46,6 +46,10 @@ pub struct BrainSnapshot {
     pub associated_labels: Vec<String>,
     /// Whether the brain has run at least one recall.
     pub has_data: bool,
+    /// Concepts activated by spiking propagation (emergent associations).
+    pub spiking_associations: Vec<(String, usize)>,
+    /// Recall mode used: "focused", "broad", "default", or empty.
+    pub recall_mode: String,
 }
 
 /// High-level facade for the spiking brain.
@@ -275,6 +279,8 @@ impl SpikingBrain {
                 region_activity: Vec::new(),
                 associated_labels: labels,
                 has_data: true,
+                spiking_associations: Vec::new(),
+                recall_mode: String::new(),
             };
             // Store the formatted knowledge in associated_labels[0] as a special entry
             if !knowledge_text.is_empty() {
@@ -290,6 +296,8 @@ impl SpikingBrain {
                 region_activity: recall.region_activity,
                 associated_labels: recall.associated_labels,
                 has_data: true,
+                spiking_associations: Vec::new(),
+                recall_mode: String::new(),
             };
         }
     }
@@ -407,6 +415,88 @@ impl SpikingBrain {
             propagation_steps: actual_steps,
             associated_labels,
         }
+    }
+
+    /// Fire seed concepts into the spiking network and collect activated concepts.
+    /// Returns (activated_concepts, mode_used). Resets neurons after propagation.
+    pub fn run_spiking_recall(&mut self) -> Option<(Vec<(String, usize)>, String)> {
+        let (seeds, mode) = self.knowledge.take_spiking_seeds();
+        if seeds.is_empty() {
+            return None;
+        }
+
+        let assoc_region = self.knowledge.concept_region;
+
+        // Save and set neuromodulators based on mode
+        let saved_mods = self.network.modulators.clone();
+        match mode.as_str() {
+            "focused" => {
+                self.network.modulators.acetylcholine = 2.0;
+                self.network.modulators.norepinephrine = 0.8;
+            }
+            "broad" => {
+                self.network.modulators.norepinephrine = 2.0;
+                self.network.modulators.acetylcholine = 0.8;
+            }
+            _ => {}
+        }
+
+        // Inject current into seed concept assemblies
+        let stim = self.knowledge.stim_current();
+        for &seed_id in &seeds {
+            let asm_start = seed_id * 100; // concept_id * assembly_size
+            let region_neurons = self.network.region(assoc_region).num_neurons();
+            for neuron in asm_start..(asm_start + 100).min(region_neurons) {
+                self.network.inject_current(assoc_region, neuron, stim);
+            }
+        }
+
+        // Propagate for 80 steps
+        let mut fired_in_assoc: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for _step in 0..80 {
+            self.network.step();
+            let spikes = self.network.region(assoc_region).last_spikes();
+            for &neuron_idx in spikes {
+                *fired_in_assoc.entry(neuron_idx).or_insert(0) += 1;
+            }
+        }
+
+        // Scan concept assemblies for activation
+        let mut activated: Vec<(String, usize)> = Vec::new();
+        let seed_set: std::collections::HashSet<usize> = seeds.iter().copied().collect();
+
+        for name in self.knowledge.registry.concept_names() {
+            if let Some(asm) = self.knowledge.registry.get(name) {
+                let concept_id = asm.start / 100;
+                if seed_set.contains(&concept_id) { continue; }
+
+                let fire_count: usize = (asm.start..asm.start + asm.size)
+                    .filter(|n| fired_in_assoc.contains_key(n))
+                    .count();
+
+                // Threshold: 10% of assembly must fire
+                if fire_count >= asm.size / 10 {
+                    let strength = (fire_count as f32 / asm.size as f32 * 100.0) as usize;
+                    activated.push((name.to_string(), strength));
+                }
+            }
+        }
+
+        activated.sort_by(|a, b| b.1.cmp(&a.1));
+        activated.truncate(10);
+
+        // Reset neurons to avoid interference with future ticks
+        for i in 0..self.network.num_regions() {
+            self.network.region_mut(i).neurons_mut().reset();
+        }
+
+        // Restore neuromodulators
+        self.network.modulators = saved_mods;
+
+        tracing::info!("Spiking recall ({} mode): {} seeds fired, {} concepts activated",
+            mode, seeds.len(), activated.len());
+
+        Some((activated, mode))
     }
 
     pub fn stats(&self) -> NetworkStats { self.network.stats() }
