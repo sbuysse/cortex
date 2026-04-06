@@ -66,20 +66,26 @@ impl KnowledgeEngine {
     }
 
     /// Replay a persisted `triples.log` into this engine (no disk writes).
-    /// Returns the triples that were loaded.
-    pub fn load_from_file(&mut self, path: &Path) -> Vec<Triple> {
+    /// Returns the triples and their sequence indices that were loaded.
+    /// Old entries without a 6th field default to seq_index=-1 (backward compat).
+    pub fn load_from_file(&mut self, path: &Path) -> Vec<(Triple, i32)> {
         let file = match File::open(path) {
             Ok(f) => f,
             Err(_) => return Vec::new(),
         };
         let mut triples = Vec::new();
         for line in BufReader::new(file).lines().map_while(Result::ok) {
-            let parts: Vec<&str> = line.splitn(5, '|').collect();
+            let parts: Vec<&str> = line.splitn(6, '|').collect();
             if parts.len() < 3 { continue; }
             let triple = Triple::new(parts[0], parts[1], parts[2]);
             let topic = if parts.len() >= 4 { parts[3] } else { "" };
+            let seq_index: i32 = if parts.len() >= 6 {
+                parts[5].trim().parse().unwrap_or(-1)
+            } else {
+                -1
+            };
             self.learn_triple_inner(&triple, topic);
-            triples.push(triple);
+            triples.push((triple, seq_index));
         }
         triples
     }
@@ -137,7 +143,7 @@ impl KnowledgeEngine {
     }
 
     /// Learn a triple AND persist it to disk (no SpikingNetwork needed).
-    pub fn learn_triple_with_topic(&mut self, triple: &Triple, topic: &str) {
+    pub fn learn_triple_with_topic(&mut self, triple: &Triple, topic: &str, seq_index: i32) {
         self.learn_triple_inner(triple, topic);
 
         if let Some(w) = self.writer.as_mut() {
@@ -147,8 +153,8 @@ impl KnowledgeEngine {
                 .unwrap_or(0);
             let _ = writeln!(
                 w,
-                "{}|{}|{}|{}|{}",
-                triple.subject, triple.relation, triple.object, topic, ts
+                "{}|{}|{}|{}|{}|{}",
+                triple.subject, triple.relation, triple.object, topic, ts, seq_index
             );
             self.unflushed += 1;
             if self.unflushed >= 100 {

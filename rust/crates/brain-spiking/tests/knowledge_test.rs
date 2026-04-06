@@ -20,8 +20,8 @@ fn test_persist_and_reload_triples() {
 
         let t1 = Triple::new("rust", "is", "language");
         let t2 = Triple::new("neuron", "uses", "stdp");
-        engine.learn_triple_with_topic(&t1, "programming");
-        engine.learn_triple_with_topic(&t2, "neuroscience");
+        engine.learn_triple_with_topic(&t1, "programming", 0);
+        engine.learn_triple_with_topic(&t2, "neuroscience", 1);
         engine.flush();
     }
 
@@ -32,6 +32,8 @@ fn test_persist_and_reload_triples() {
         let loaded = engine.load_from_file(&log_path);
 
         assert_eq!(loaded.len(), 2, "expected 2 triples loaded from disk");
+        assert_eq!(loaded[0].1, 0, "first triple seq_index should be 0");
+        assert_eq!(loaded[1].1, 1, "second triple seq_index should be 1");
         assert!(engine.num_associations() > 0, "associations should be non-zero after reload");
         assert!(engine.num_concepts() >= 4, "at least rust, is, language, neuron should be registered");
 
@@ -52,7 +54,7 @@ fn test_weight_cap_at_two() {
     let triple = Triple::new("cat", "is", "animal");
     // Learn the same triple many times — weight must not exceed 2.0.
     for _ in 0..20 {
-        engine.learn_triple_with_topic(&triple, "biology");
+        engine.learn_triple_with_topic(&triple, "biology", 0);
     }
     // If the weight cap were 1.0 the chain would still be found, but we can at
     // least verify associations are non-zero and the engine is stable.
@@ -107,8 +109,8 @@ fn test_topic_provenance() {
 fn test_all_topics_and_bridge_via_engine() {
     let mut engine = KnowledgeEngine::new(0, REGION_NEURONS, ASSEMBLY_SIZE);
 
-    engine.learn_triple_with_topic(&Triple::new("rust", "is", "language"), "programming");
-    engine.learn_triple_with_topic(&Triple::new("rust", "uses", "ownership"), "systems");
+    engine.learn_triple_with_topic(&Triple::new("rust", "is", "language"), "programming", 0);
+    engine.learn_triple_with_topic(&Triple::new("rust", "uses", "ownership"), "systems", 1);
 
     // "rust" appears in two topics → bridge
     let bridges = engine.bridge_concepts();
@@ -130,15 +132,15 @@ fn test_cross_domain_recall() {
 
     // Domain 1: TurboQuant
     engine.learn_triple_with_topic(
-        &Triple::new("turboquant", "compresses", "kv cache"), "TurboQuant");
+        &Triple::new("turboquant", "compresses", "kv cache"), "TurboQuant", 0);
     engine.learn_triple_with_topic(
-        &Triple::new("turboquant", "reduces", "memory usage"), "TurboQuant");
+        &Triple::new("turboquant", "reduces", "memory usage"), "TurboQuant", 1);
 
     // Domain 2: FlashAttention
     engine.learn_triple_with_topic(
-        &Triple::new("flash attention", "optimizes", "kv cache"), "FlashAttention");
+        &Triple::new("flash attention", "optimizes", "kv cache"), "FlashAttention", 0);
     engine.learn_triple_with_topic(
-        &Triple::new("flash attention", "speeds up", "transformer inference"), "FlashAttention");
+        &Triple::new("flash attention", "speeds up", "transformer inference"), "FlashAttention", 1);
 
     // Query spanning both domains
     let mut net = SpikingNetwork::new(NetworkConfig { regions: vec![] });
@@ -159,9 +161,9 @@ fn test_spiking_seeds_after_bfs() {
     let mut engine = KnowledgeEngine::new(0, 50000, 100);
 
     engine.learn_triple_with_topic(
-        &Triple::new("turboquant", "compresses", "kv cache"), "TurboQuant");
+        &Triple::new("turboquant", "compresses", "kv cache"), "TurboQuant", 0);
     engine.learn_triple_with_topic(
-        &Triple::new("flash attention", "optimizes", "kv cache"), "FlashAttention");
+        &Triple::new("flash attention", "optimizes", "kv cache"), "FlashAttention", 0);
 
     let mut net = SpikingNetwork::new(NetworkConfig { regions: vec![] });
     let _chain = engine.recall_chain_bidirectional(&mut net, "turboquant flash attention", 10);
@@ -179,7 +181,7 @@ fn test_spiking_seeds_after_bfs() {
 fn test_synaptic_imprinting() {
     let mut brain = brain_spiking::SpikingBrain::new(0.01, None);
     let triple = brain_spiking::Triple::new("alpha", "connects", "beta");
-    brain.knowledge.learn_triple_with_topic(&triple, "test");
+    brain.knowledge.learn_triple_with_topic(&triple, "test", 0);
     let strengthened = brain.imprint_synapses(&triple);
     println!("Imprinted {} synapses at scale=0.01", strengthened);
     // At 0.01 scale the count may be small but the method should not panic

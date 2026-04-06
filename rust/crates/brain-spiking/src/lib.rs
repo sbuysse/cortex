@@ -121,8 +121,12 @@ impl SpikingBrain {
             triple_receiver,
         };
 
-        for triple in &loaded_triples {
-            brain.imprint_synapses(triple);
+        let mut total_imprinted = 0usize;
+        for (triple, _seq) in &loaded_triples {
+            total_imprinted += brain.imprint_synapses(triple);
+        }
+        if total_imprinted > 0 {
+            tracing::info!("Imprinted {} synapses from {} loaded triples", total_imprinted, loaded_triples.len());
         }
 
         brain
@@ -160,8 +164,12 @@ impl SpikingBrain {
             triple_receiver,
         };
 
-        for triple in &loaded_triples {
-            brain.imprint_synapses(triple);
+        let mut total_imprinted = 0usize;
+        for (triple, _seq) in &loaded_triples {
+            total_imprinted += brain.imprint_synapses(triple);
+        }
+        if total_imprinted > 0 {
+            tracing::info!("Imprinted {} synapses from {} loaded triples", total_imprinted, loaded_triples.len());
         }
 
         brain

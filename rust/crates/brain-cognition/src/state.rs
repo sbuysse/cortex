@@ -27,7 +27,7 @@ pub struct BrainState {
     /// Searched alongside text_encoder labels during associative recall.
     pub learned_concepts: std::sync::Mutex<Vec<(String, Vec<f32>)>>,
     /// Triple queue for knowledge learning — separate from brain mutex.
-    pub triple_queue: std::sync::Arc<std::sync::Mutex<Vec<(brain_spiking::Triple, String)>>>,
+    pub triple_queue: std::sync::Arc<std::sync::Mutex<Vec<(brain_spiking::Triple, String, i32)>>>,
     /// Recall queue — concept names to recall via chain propagation.
     pub recall_queue: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub codebook: std::sync::Mutex<Option<ConceptCodebook>>,
@@ -169,7 +169,7 @@ impl BrainState {
 
         let spiking_snapshot = std::sync::Arc::new(std::sync::Mutex::new(brain_spiking::BrainSnapshot::default()));
 
-        let triple_queue = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(brain_spiking::Triple, String)>::new()));
+        let triple_queue = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(brain_spiking::Triple, String, i32)>::new()));
         let recall_queue: std::sync::Arc<std::sync::Mutex<Option<String>>> = std::sync::Arc::new(std::sync::Mutex::new(None));
 
         // Start spiking brain background tick thread
@@ -274,8 +274,8 @@ impl BrainState {
                         let count = triples.len();
                         let mut sb = sb_clone.lock().unwrap();
                         let mut imprinted = 0;
-                        for (triple, topic) in &triples {
-                            sb.knowledge.learn_triple_with_topic(triple, topic);
+                        for (triple, topic, seq_idx) in &triples {
+                            sb.knowledge.learn_triple_with_topic(triple, topic, *seq_idx);
                             imprinted += sb.imprint_synapses(triple);
                         }
                         sb.knowledge.flush();
