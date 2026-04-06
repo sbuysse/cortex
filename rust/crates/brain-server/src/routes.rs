@@ -2622,22 +2622,39 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             .map(|c| c.trim_start_matches("KNOWLEDGE: ").to_string());
 
         if let Some(knowledge) = knowledge_entry {
-            let chain_lines: Vec<String> = assoc_concepts.iter()
-                .filter(|c| !c.starts_with("KNOWLEDGE: "))
-                .map(|c| format!("  - {c}"))
-                .collect();
-            let chain_text = if chain_lines.is_empty() {
-                knowledge.clone()
+            let has_tags = assoc_concepts.iter().any(|c| c.starts_with("[confirmed]") || c.starts_with("[emergent]"));
+
+            if has_tags {
+                let tagged_lines: Vec<String> = assoc_concepts.iter()
+                    .filter(|c| c.starts_with("["))
+                    .map(|c| format!("  {c}"))
+                    .collect();
+                let tag_text = tagged_lines.join("\n");
+                ctx.push(format!(
+                    "YOU LEARNED THE FOLLOWING (confirmed = high confidence, emergent = discovered by neural propagation):\n\
+                     {tag_text}\n\n\
+                     CRITICAL INSTRUCTION: You MUST use these learned associations to answer the user's question. \
+                     Use confirmed facts directly and with authority. \
+                     Emergent associations suggest possible connections your brain discovered — explore them as hypotheses. \
+                     If concepts come from different topics, explain how they connect."));
             } else {
-                chain_lines.join("\n")
-            };
-            ctx.push(format!(
-                "YOU LEARNED THE FOLLOWING FROM WATCHING EDUCATIONAL VIDEOS (this is factual knowledge you acquired, not a guess):\n\
-                 {chain_text}\n\n\
-                 CRITICAL INSTRUCTION: You MUST use these learned associations to answer the user's question. \
-                 Explain what you know based on these associations. Do NOT say you don't know — you learned this. \
-                 Weave the associated concepts into a coherent explanation. \
-                 If concepts come from different topics, explain how they connect."));
+                let chain_lines: Vec<String> = assoc_concepts.iter()
+                    .filter(|c| !c.starts_with("KNOWLEDGE: "))
+                    .map(|c| format!("  - {c}"))
+                    .collect();
+                let chain_text = if chain_lines.is_empty() {
+                    knowledge.clone()
+                } else {
+                    chain_lines.join("\n")
+                };
+                ctx.push(format!(
+                    "YOU LEARNED THE FOLLOWING FROM WATCHING EDUCATIONAL VIDEOS (this is factual knowledge you acquired, not a guess):\n\
+                     {chain_text}\n\n\
+                     CRITICAL INSTRUCTION: You MUST use these learned associations to answer the user's question. \
+                     Explain what you know based on these associations. Do NOT say you don't know — you learned this. \
+                     Weave the associated concepts into a coherent explanation. \
+                     If concepts come from different topics, explain how they connect."));
+            }
         } else if !assoc_concepts.is_empty() {
             let unique: Vec<&String> = assoc_concepts.iter()
                 .filter(|c| !c.starts_with("KNOWLEDGE: "))
