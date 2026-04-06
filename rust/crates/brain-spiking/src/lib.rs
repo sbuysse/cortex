@@ -421,6 +421,7 @@ impl SpikingBrain {
     /// Returns (activated_concepts, mode_used). Resets neurons after propagation.
     pub fn run_spiking_recall(&mut self) -> Option<(Vec<(String, usize)>, String)> {
         let (seeds, mode) = self.knowledge.take_spiking_seeds();
+        tracing::info!("Spiking recall: {} seeds, mode={}", seeds.len(), mode);
         if seeds.is_empty() {
             return None;
         }
@@ -451,9 +452,9 @@ impl SpikingBrain {
             }
         }
 
-        // Propagate for 80 steps
+        // Propagate for 30 steps (each step ~0.2s at 2M neurons, total ~6s)
         let mut fired_in_assoc: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-        for _step in 0..80 {
+        for _step in 0..30 {
             self.network.step();
             let spikes = self.network.region(assoc_region).last_spikes();
             for &neuron_idx in spikes {
@@ -474,8 +475,8 @@ impl SpikingBrain {
                     .filter(|n| fired_in_assoc.contains_key(n))
                     .count();
 
-                // Threshold: 10% of assembly must fire
-                if fire_count >= asm.size / 10 {
+                // Threshold: 5% of assembly must fire (at least 5 neurons out of 100)
+                if fire_count >= (asm.size / 20).max(3) {
                     let strength = (fire_count as f32 / asm.size as f32 * 100.0) as usize;
                     activated.push((name.to_string(), strength));
                 }
