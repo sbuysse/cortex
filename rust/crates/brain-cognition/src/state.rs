@@ -201,21 +201,27 @@ impl BrainState {
                         let mut snap = brain_spiking::BrainSnapshot::default();
                         snap.has_data = true;
 
-                        if let Some((spiking_assoc, mode)) = spiking_result {
+                        if let Some((spiking_direct, spiking_predicted, mode)) = spiking_result {
                             snap.recall_mode = mode;
-                            snap.spiking_associations = spiking_assoc.clone();
+                            snap.spiking_associations = spiking_direct.clone();
+                            snap.predicted_associations = spiking_predicted.clone();
 
+                            let all_spiking: Vec<(String, usize)> = spiking_direct.iter()
+                                .chain(spiking_predicted.iter())
+                                .cloned().collect();
                             let spiking_names: std::collections::HashSet<String> =
-                                spiking_assoc.iter().map(|(n, _)| n.clone()).collect();
+                                all_spiking.iter().map(|(n, _)| n.clone()).collect();
                             let bfs_names: std::collections::HashSet<String> =
                                 bfs_chain.iter().map(|(n, _)| n.clone()).collect();
+                            let predicted_names: std::collections::HashSet<String> =
+                                spiking_predicted.iter().map(|(n, _)| n.clone()).collect();
 
                             let mut merged: Vec<(String, usize, &str)> = Vec::new();
 
-                            // Confirmed: in both
+                            // Confirmed: in both BFS and spiking direct
                             for (name, bfs_w) in &bfs_chain {
-                                if spiking_names.contains(name) {
-                                    let spike_w = spiking_assoc.iter()
+                                if spiking_names.contains(name) && !predicted_names.contains(name) {
+                                    let spike_w = all_spiking.iter()
                                         .find(|(n, _)| n == name)
                                         .map(|(_, w)| *w).unwrap_or(0);
                                     let weight = ((*bfs_w).max(spike_w) as f32 * 1.5) as usize;
@@ -228,9 +234,16 @@ impl BrainState {
                                     merged.push((name.clone(), *w, "explicit"));
                                 }
                             }
-                            // Emergent: spiking only
-                            for (name, w) in &spiking_assoc {
+                            // Predicted: spiking window 2 only
+                            for (name, w) in &spiking_predicted {
                                 if !bfs_names.contains(name) {
+                                    let weight = (*w as f32 * 0.8) as usize;
+                                    merged.push((name.clone(), weight, "predicted"));
+                                }
+                            }
+                            // Emergent: spiking direct only (not in BFS, not predicted)
+                            for (name, w) in &spiking_direct {
+                                if !bfs_names.contains(name) && !predicted_names.contains(name) {
                                     let weight = (*w as f32 * 0.7) as usize;
                                     merged.push((name.clone(), weight, "emergent"));
                                 }

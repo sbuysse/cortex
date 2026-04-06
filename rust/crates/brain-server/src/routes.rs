@@ -2622,7 +2622,8 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             .map(|c| c.trim_start_matches("KNOWLEDGE: ").to_string());
 
         if let Some(knowledge) = knowledge_entry {
-            let has_tags = assoc_concepts.iter().any(|c| c.starts_with("[confirmed]") || c.starts_with("[emergent]"));
+            let has_tags = assoc_concepts.iter().any(|c|
+                c.starts_with("[confirmed]") || c.starts_with("[emergent]") || c.starts_with("[predicted]"));
 
             if has_tags {
                 let tagged_lines: Vec<String> = assoc_concepts.iter()
@@ -2631,10 +2632,11 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
                     .collect();
                 let tag_text = tagged_lines.join("\n");
                 ctx.push(format!(
-                    "YOU LEARNED THE FOLLOWING (confirmed = high confidence, emergent = discovered by neural propagation):\n\
+                    "YOU LEARNED THE FOLLOWING (confirmed = high confidence, predicted = what typically follows, emergent = discovered by neural pathways):\n\
                      {tag_text}\n\n\
                      CRITICAL INSTRUCTION: You MUST use these learned associations to answer the user's question. \
                      Use confirmed facts directly and with authority. \
+                     Predicted associations represent what you learned typically follows — use them to explain consequences and next steps. \
                      Emergent associations suggest possible connections your brain discovered — explore them as hypotheses. \
                      If concepts come from different topics, explain how they connect."));
             } else {
