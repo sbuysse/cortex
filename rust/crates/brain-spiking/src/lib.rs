@@ -211,7 +211,7 @@ impl SpikingBrain {
 
     /// Recall knowledge chain and format as text.
     pub fn recall_knowledge(&mut self, query: &str) -> (Vec<(String, usize)>, String) {
-        let chain = self.knowledge.recall_chain(&mut self.network, query, 6);
+        let chain = self.knowledge.recall_chain_bidirectional(&mut self.network, query, 10);
         let knowledge = KnowledgeEngine::chain_to_knowledge(query, &chain);
         (chain, knowledge)
     }

@@ -1,4 +1,5 @@
 use brain_spiking::concepts::{ConceptRegistry, Triple};
+use brain_spiking::network::{SpikingNetwork, NetworkConfig};
 use brain_spiking::knowledge::KnowledgeEngine;
 
 const REGION_NEURONS: usize = 100_000;
@@ -117,4 +118,38 @@ fn test_all_topics_and_bridge_via_engine() {
     let all = engine.all_topics();
     assert!(all.contains(&"programming".to_string()));
     assert!(all.contains(&"systems".to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 — bidirectional BFS / cross-domain recall
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cross_domain_recall() {
+    let mut engine = KnowledgeEngine::new(0, 50000, 100);
+
+    // Domain 1: TurboQuant
+    engine.learn_triple_with_topic(
+        &Triple::new("turboquant", "compresses", "kv cache"), "TurboQuant");
+    engine.learn_triple_with_topic(
+        &Triple::new("turboquant", "reduces", "memory usage"), "TurboQuant");
+
+    // Domain 2: FlashAttention
+    engine.learn_triple_with_topic(
+        &Triple::new("flash attention", "optimizes", "kv cache"), "FlashAttention");
+    engine.learn_triple_with_topic(
+        &Triple::new("flash attention", "speeds up", "transformer inference"), "FlashAttention");
+
+    // Query spanning both domains
+    let mut net = SpikingNetwork::new(NetworkConfig { regions: vec![] });
+    let chain = engine.recall_chain_bidirectional(&mut net, "turboquant flash attention", 10);
+
+    let names: Vec<&str> = chain.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(!names.is_empty(), "Should find cross-domain associations");
+
+    // Should reach concepts across domains through "kv cache" bridge
+    let has_cross_domain = names.iter().any(|n|
+        n.contains("memory") || n.contains("transformer") || n.contains("kv cache")
+    );
+    assert!(has_cross_domain, "Should reach concepts across domains, got: {:?}", names);
 }

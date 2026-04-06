@@ -272,6 +272,144 @@ impl KnowledgeEngine {
         None
     }
 
+    /// BFS helper: explores forward and reverse edges from start nodes.
+    /// Returns HashMap<concept_id, max_weight>.
+    fn bfs_explore(&self, start_ids: &[usize], max_hops: usize) -> HashMap<usize, f32> {
+        let mut visited: HashMap<usize, f32> = HashMap::new();
+        let mut frontier: Vec<usize> = start_ids.to_vec();
+
+        for id in &frontier {
+            visited.insert(*id, 1.0);
+        }
+
+        for _hop in 0..max_hops {
+            let mut next: Vec<(usize, f32)> = Vec::new();
+
+            for &src_id in &frontier {
+                for (&(from, to), &weight) in &self.associations {
+                    if weight <= 0.1 { continue; }
+                    // Forward edge: from == src_id
+                    if from == src_id && !visited.contains_key(&to) {
+                        next.push((to, weight));
+                    }
+                    // Reverse edge: to == src_id (at 0.7x weight)
+                    if to == src_id && !visited.contains_key(&from) {
+                        next.push((from, weight * 0.7));
+                    }
+                }
+            }
+
+            if next.is_empty() { break; }
+
+            next.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            next.truncate(8);
+
+            frontier.clear();
+            for (cid, w) in next {
+                let entry = visited.entry(cid).or_insert(0.0);
+                if w > *entry { *entry = w; }
+                frontier.push(cid);
+            }
+        }
+
+        visited
+    }
+
+    /// Bidirectional BFS recall: find cross-domain bridge concepts.
+    /// If 2+ concept clusters found in query, BFS from both sides and boost bridge nodes.
+    /// Falls back to recall_chain if fewer than 2 clusters found.
+    pub fn recall_chain_bidirectional(&self, _net: &mut SpikingNetwork, query: &str, max_hops: usize) -> Vec<(String, usize)> {
+        // Parse query for ALL recognizable concept names (including multi-word)
+        let query_lower = query.to_lowercase();
+        let all_names: Vec<String> = self.registry.concept_names().into_iter().map(|s| s.to_string()).collect();
+
+        // Match concept names against query — prefer longer matches first
+        let mut matched_names: Vec<String> = Vec::new();
+        let mut sorted_names = all_names.clone();
+        sorted_names.sort_by(|a, b| b.len().cmp(&a.len()));
+
+        for name in &sorted_names {
+            let name_lower = name.to_lowercase();
+            if name_lower.len() > 3 && query_lower.contains(&name_lower) {
+                matched_names.push(name.clone());
+            }
+        }
+
+        // Build concept ID clusters per matched name
+        let mut cluster_ids: Vec<usize> = Vec::new();
+        for name in &matched_names {
+            if let Some(asm) = self.registry.get(name) {
+                let cid = Self::concept_id(asm.start);
+                if !cluster_ids.contains(&cid) {
+                    cluster_ids.push(cid);
+                }
+            }
+        }
+
+        if cluster_ids.len() < 2 {
+            // Fall back to unidirectional recall
+            return self.recall_chain(_net, query, max_hops);
+        }
+
+        // Split clusters into two sides (first half vs second half)
+        let mid = cluster_ids.len() / 2;
+        let side_a = &cluster_ids[..mid];
+        let side_b = &cluster_ids[mid..];
+
+        // BFS from both sides
+        let visited_a = self.bfs_explore(side_a, max_hops);
+        let visited_b = self.bfs_explore(side_b, max_hops);
+
+        // Merge results: bridge nodes get boosted weight
+        let mut merged: HashMap<usize, f32> = HashMap::new();
+
+        // Start IDs don't go into results
+        let start_set: std::collections::HashSet<usize> = cluster_ids.iter().copied().collect();
+
+        for (&cid, &wa) in &visited_a {
+            if start_set.contains(&cid) { continue; }
+            let entry = merged.entry(cid).or_insert(0.0);
+            if wa > *entry { *entry = wa; }
+        }
+        for (&cid, &wb) in &visited_b {
+            if start_set.contains(&cid) { continue; }
+            // Bridge: found by both sides — boost by 1.5x
+            if visited_a.contains_key(&cid) {
+                let entry = merged.entry(cid).or_insert(0.0);
+                *entry = (*entry + wb * 1.5).min(3.0);
+            } else {
+                let entry = merged.entry(cid).or_insert(0.0);
+                if wb > *entry { *entry = wb; }
+            }
+        }
+
+        // Sort by weight descending
+        let mut pairs: Vec<(usize, f32)> = merged.into_iter().collect();
+        pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Convert to (name, weight) and filter noise
+        let noise_concepts = ["is", "are", "was", "were", "relates-to", "has", "have",
+            "uses", "use", "called", "known", "means", "works",
+            "compresses", "reduces", "enables", "provides", "creates",
+            "converts", "stores", "processes", "improves", "requires",
+            "replaces", "achieves", "represents", "contains", "produces",
+            "maintains", "generates", "supports", "implements", "optimizes",
+            "transforms", "currently talking", "numbers relate", "these numbers"];
+
+        let mut result: Vec<(String, usize)> = Vec::new();
+        for (cid, weight) in pairs {
+            if let Some(name) = self.id_to_name(cid) {
+                let lower = name.to_lowercase();
+                if !noise_concepts.contains(&lower.as_str()) && lower.len() > 3 {
+                    result.push((name, (weight * 100.0) as usize));
+                }
+            }
+        }
+
+        result.truncate(10);
+        result
+    }
+
     /// Format recalled associations as structured knowledge.
     pub fn chain_to_knowledge(query: &str, chain: &[(String, usize)]) -> String {
         if chain.is_empty() { return String::new(); }
