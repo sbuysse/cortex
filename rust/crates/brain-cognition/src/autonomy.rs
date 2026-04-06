@@ -714,7 +714,7 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
         if count > 0 {
             let mut queue = triple_queue.lock().unwrap();
             for triple in all_triples {
-                queue.push(triple);
+                queue.push((triple, topic_key_owned.clone()));
             }
             tracing::info!("LLM extracted {} triples from {} sentences in {:.1}s (queue size: {})",
                 count, sentence_count, t0.elapsed().as_secs_f32(), queue.len());

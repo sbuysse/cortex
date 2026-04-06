@@ -27,7 +27,7 @@ pub struct BrainState {
     /// Searched alongside text_encoder labels during associative recall.
     pub learned_concepts: std::sync::Mutex<Vec<(String, Vec<f32>)>>,
     /// Triple queue for knowledge learning — separate from brain mutex.
-    pub triple_queue: std::sync::Arc<std::sync::Mutex<Vec<brain_spiking::Triple>>>,
+    pub triple_queue: std::sync::Arc<std::sync::Mutex<Vec<(brain_spiking::Triple, String)>>>,
     /// Recall queue — concept names to recall via chain propagation.
     pub recall_queue: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub codebook: std::sync::Mutex<Option<ConceptCodebook>>,
@@ -154,7 +154,8 @@ impl BrainState {
                 .unwrap_or(0.0);
             if scale > 0.0 {
                 tracing::info!("Initializing spiking brain (10 regions, scale={scale})");
-                let mut sb = brain_spiking::SpikingBrain::new(scale);
+                let data_dir = config.project_root.join("data");
+                let mut sb = brain_spiking::SpikingBrain::new(scale, Some(data_dir));
                 let save_dir = config.project_root.join("outputs/cortex");
                 let loaded = sb.load(&save_dir);
                 if loaded > 0 {
@@ -168,7 +169,7 @@ impl BrainState {
 
         let spiking_snapshot = std::sync::Arc::new(std::sync::Mutex::new(brain_spiking::BrainSnapshot::default()));
 
-        let triple_queue = std::sync::Arc::new(std::sync::Mutex::new(Vec::<brain_spiking::Triple>::new()));
+        let triple_queue = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(brain_spiking::Triple, String)>::new()));
         let recall_queue: std::sync::Arc<std::sync::Mutex<Option<String>>> = std::sync::Arc::new(std::sync::Mutex::new(None));
 
         // Start spiking brain background tick thread
@@ -210,9 +211,10 @@ impl BrainState {
                         let t0 = std::time::Instant::now();
                         let count = triples.len();
                         let mut sb = sb_clone.lock().unwrap();
-                        for triple in &triples {
-                            sb.learn_triple(triple);
+                        for (triple, topic) in &triples {
+                            sb.knowledge.learn_triple_with_topic(triple, topic);
                         }
+                        sb.knowledge.flush();
                         let elapsed = t0.elapsed().as_secs_f32();
                         tracing::info!("Learned {} triples in {:.3}s", count, elapsed);
                         drop(sb);

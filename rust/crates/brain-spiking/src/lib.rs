@@ -73,7 +73,8 @@ pub struct SpikingBrain {
 impl SpikingBrain {
     /// Create a spiking brain with all 10 regions.
     /// `scale`: neuron count multiplier (0.01 = tiny test, 1.0 = full ~2M neurons).
-    pub fn new(scale: f32) -> Self {
+    /// `data_dir`: optional directory for knowledge persistence (triples.log).
+    pub fn new(scale: f32, data_dir: Option<std::path::PathBuf>) -> Self {
         let net = regions::full_brain::build_full_brain(scale, 0.05, 0.1);
         let vis_n = net.region(regions::full_brain::VISUAL).num_neurons();
         let aud_n = net.region(regions::full_brain::AUDITORY).num_neurons();
@@ -86,7 +87,15 @@ impl SpikingBrain {
         // 100 neurons per concept, capacity = assoc_neurons / 100 concepts.
         let assoc_region = if net.num_regions() >= 10 { regions::full_brain::ASSOCIATION } else { 0 };
         let assoc_neurons = net.region(assoc_region).num_neurons();
-        let knowledge = KnowledgeEngine::new(assoc_region, assoc_neurons, 100);
+        let mut knowledge = KnowledgeEngine::new(assoc_region, assoc_neurons, 100);
+        if let Some(ref dir) = data_dir {
+            knowledge.set_data_dir(dir);
+            let loaded = knowledge.load_from_file(&dir.join("triples.log"));
+            if loaded > 0 {
+                tracing::info!("Spiking brain loaded {loaded} persisted triples ({} associations, {} concepts)",
+                    knowledge.num_associations(), knowledge.num_concepts());
+            }
+        }
 
         let (triple_sender, triple_receiver) = crossbeam::channel::unbounded();
 
@@ -107,10 +116,18 @@ impl SpikingBrain {
     }
 
     /// Create with just the association cortex (backward compat).
-    pub fn new_association_only(n_assoc: usize) -> Self {
+    pub fn new_association_only(n_assoc: usize, data_dir: Option<std::path::PathBuf>) -> Self {
         let net = regions::association::build_association_cortex(n_assoc, 0.05);
         let half = n_assoc / 2;
-        let knowledge = KnowledgeEngine::new(0, n_assoc, 100);
+        let mut knowledge = KnowledgeEngine::new(0, n_assoc, 100);
+        if let Some(ref dir) = data_dir {
+            knowledge.set_data_dir(dir);
+            let loaded = knowledge.load_from_file(&dir.join("triples.log"));
+            if loaded > 0 {
+                tracing::info!("Spiking brain loaded {loaded} persisted triples ({} associations, {} concepts)",
+                    knowledge.num_associations(), knowledge.num_concepts());
+            }
+        }
         let (triple_sender, triple_receiver) = crossbeam::channel::unbounded();
         Self {
             network: net,
