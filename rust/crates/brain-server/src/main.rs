@@ -131,10 +131,13 @@ async fn main() {
     };
 
     // Build shared state and router
+    let static_dir = project_root.join("static");
+    let static_opt = if static_dir.is_dir() { Some(static_dir.as_path()) } else { None };
+
     let (app, state) = brain_server::app::build_app_with_state(
         &db_path,
         &templates_dir,
-        None,
+        static_opt,
         project_root.clone(),
         output_dir,
         interact,
