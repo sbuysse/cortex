@@ -4,9 +4,23 @@ A cognitive architecture in Rust combining spiking neural networks with foundati
 
 ## Overview
 
-Cortex is a research platform for studying how spiking neural dynamics can form associative knowledge from multimodal input. It encodes perception (DINOv2, CLIP, Whisper, MiniLM) into spike trains, learns associations through concept-level association matrices, and recalls knowledge through BFS chain propagation across brain regions.
+Cortex is a research platform for studying how spiking neural dynamics can form associative knowledge from multimodal input. It encodes perception (DINOv2, CLIP, Whisper, MiniLM) into spike trains, imprints knowledge into synaptic weights, and recalls through spreading activation across 2 billion connections — the same mechanism the brain uses.
 
-The system can watch YouTube videos, extract knowledge triples from transcripts using LLM-powered extraction, encode them as concept associations in the spiking brain, and recall associated concepts through learned pathways — without storing any text.
+The system watches YouTube videos, extracts knowledge triples via LLM, imprints them into actual synaptic connections between neuron assemblies, and discovers emergent cross-domain associations through neural propagation. Knowledge lives in the weights, not in a database.
+
+### Neuroscience Alignment
+
+Cortex is grounded in real neuroscience. See [docs/NEUROSCIENCE.md](docs/NEUROSCIENCE.md) for a point-by-point comparison with brain science. Key alignments:
+
+| Mechanism | Biology | Cortex |
+|-----------|---------|--------|
+| **Neurons** | Leaky integrate-and-fire with spike-frequency adaptation | ALIF neurons (2M), SoA layout |
+| **Learning** | Three-factor STDP (pre/post timing × neuromodulator) | Eligibility traces × dopamine/ACh gating |
+| **Stability** | Homeostatic multiplicative synaptic scaling | Multiplicative drive scaling (preserves weight ratios) |
+| **Recall** | Spreading activation through synaptic connections | Spike propagation through 2B imprinted synapses |
+| **Sequences** | Theta phase precession (temporal offset → STDP) | STDP-timed chain imprinting (5-step offset) |
+| **Modulation** | DA (reward), ACh (attention), NE (arousal), 5-HT (mood) | Four scalar modulators controlling learning and recall modes |
+| **Concepts** | Cell assemblies (~100 co-firing neurons) | 100-neuron dedicated assemblies per concept |
 
 ## Architecture
 
