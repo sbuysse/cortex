@@ -273,12 +273,14 @@ impl BrainState {
                         let t0 = std::time::Instant::now();
                         let count = triples.len();
                         let mut sb = sb_clone.lock().unwrap();
+                        let mut imprinted = 0;
                         for (triple, topic) in &triples {
                             sb.knowledge.learn_triple_with_topic(triple, topic);
+                            imprinted += sb.imprint_synapses(triple);
                         }
                         sb.knowledge.flush();
                         let elapsed = t0.elapsed().as_secs_f32();
-                        tracing::info!("Learned {} triples in {:.3}s", count, elapsed);
+                        tracing::info!("Learned {} triples in {:.3}s, imprinted {} synapses", count, elapsed, imprinted);
                         drop(sb);
                         continue;
                     }
