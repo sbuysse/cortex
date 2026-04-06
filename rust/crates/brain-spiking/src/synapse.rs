@@ -205,9 +205,19 @@ impl SynapseCSR {
             }
         }
 
+        // Homeostatic synaptic scaling: multiplicative normalization that preserves
+        // relative weight ratios (biologically plausible, unlike hard clamping).
+        // When total drive exceeds target, scale ALL inputs proportionally.
+        // This lets strong imprinted connections dominate weak random ones naturally.
         for i in 0..n {
             if synaptic[i] != 0.0 {
-                current_buf[i] += synaptic[i].clamp(-max_synaptic_drive, max_synaptic_drive);
+                let abs_drive = synaptic[i].abs();
+                if abs_drive > max_synaptic_drive {
+                    // Multiplicative scaling: drive * (target / actual)
+                    current_buf[i] += synaptic[i] * (max_synaptic_drive / abs_drive);
+                } else {
+                    current_buf[i] += synaptic[i];
+                }
             }
         }
         }); // end SYNAPTIC_BUF.with

@@ -216,36 +216,37 @@ impl BrainState {
                             let predicted_names: std::collections::HashSet<String> =
                                 spiking_predicted.iter().map(|(n, _)| n.clone()).collect();
 
+                            // Spiking-primary merge: spiking results are the primary source,
+                            // BFS confirms but doesn't dominate. This is the brain-like approach —
+                            // knowledge lives in synaptic weights, not in a symbolic database.
                             let mut merged: Vec<(String, usize, &str)> = Vec::new();
 
-                            // Confirmed: in both BFS and spiking direct
-                            for (name, bfs_w) in &bfs_chain {
-                                if spiking_names.contains(name) && !predicted_names.contains(name) {
-                                    let spike_w = all_spiking.iter()
+                            // Confirmed: found by both spiking and BFS (highest confidence)
+                            for (name, spike_w) in spiking_direct.iter().chain(spiking_predicted.iter()) {
+                                if bfs_names.contains(name) {
+                                    let bfs_w = bfs_chain.iter()
                                         .find(|(n, _)| n == name)
                                         .map(|(_, w)| *w).unwrap_or(0);
-                                    let weight = ((*bfs_w).max(spike_w) as f32 * 1.5) as usize;
+                                    let weight = ((*spike_w).max(bfs_w) as f32 * 1.5) as usize;
                                     merged.push((name.clone(), weight, "confirmed"));
                                 }
                             }
-                            // Explicit: BFS only
+                            // Predicted: spiking window 2 (chain-following, full weight)
+                            for (name, w) in &spiking_predicted {
+                                if !bfs_names.contains(name) {
+                                    merged.push((name.clone(), *w, "predicted"));
+                                }
+                            }
+                            // Emergent: spiking direct, not in BFS (full weight — these are real neural discoveries)
+                            for (name, w) in &spiking_direct {
+                                if !bfs_names.contains(name) && !predicted_names.contains(name) {
+                                    merged.push((name.clone(), *w, "emergent"));
+                                }
+                            }
+                            // BFS-only: supplement with explicit facts the spiking network missed
                             for (name, w) in &bfs_chain {
                                 if !spiking_names.contains(name) {
                                     merged.push((name.clone(), *w, "explicit"));
-                                }
-                            }
-                            // Predicted: spiking window 2 only
-                            for (name, w) in &spiking_predicted {
-                                if !bfs_names.contains(name) {
-                                    let weight = (*w as f32 * 0.8) as usize;
-                                    merged.push((name.clone(), weight, "predicted"));
-                                }
-                            }
-                            // Emergent: spiking direct only (not in BFS, not predicted)
-                            for (name, w) in &spiking_direct {
-                                if !bfs_names.contains(name) && !predicted_names.contains(name) {
-                                    let weight = (*w as f32 * 0.7) as usize;
-                                    merged.push((name.clone(), weight, "emergent"));
                                 }
                             }
 

@@ -505,6 +505,9 @@ impl SpikingBrain {
         }
 
         // Window 1 (steps 1-10): Direct associations
+        // Using step_with_clamp(1.5) — multiplicative synaptic scaling at higher target
+        // preserves relative weight ratios while letting imprinted connections
+        // (0.8-1.0) drive target assemblies above activation threshold.
         let mut fired_window1: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for _step in 0..10 {
             let spikes = self.network.region_mut(assoc_region).step_with_clamp(1.5);
@@ -513,7 +516,7 @@ impl SpikingBrain {
             }
         }
 
-        // Window 2 (steps 11-30): Chain predictions
+        // Window 2 (steps 11-30): Chain predictions (traveled through forward temporal links)
         let mut fired_window2: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for _step in 0..20 {
             let spikes = self.network.region_mut(assoc_region).step_with_clamp(1.5);
