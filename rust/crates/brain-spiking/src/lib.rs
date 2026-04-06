@@ -92,18 +92,21 @@ impl SpikingBrain {
         let assoc_region = if net.num_regions() >= 10 { regions::full_brain::ASSOCIATION } else { 0 };
         let assoc_neurons = net.region(assoc_region).num_neurons();
         let mut knowledge = KnowledgeEngine::new(assoc_region, assoc_neurons, 100);
-        if let Some(ref dir) = data_dir {
+        let loaded_triples = if let Some(ref dir) = data_dir {
             knowledge.set_data_dir(dir);
-            let loaded = knowledge.load_from_file(&dir.join("triples.log"));
-            if loaded > 0 {
-                tracing::info!("Spiking brain loaded {loaded} persisted triples ({} associations, {} concepts)",
-                    knowledge.num_associations(), knowledge.num_concepts());
+            let triples = knowledge.load_from_file(&dir.join("triples.log"));
+            if !triples.is_empty() {
+                tracing::info!("Spiking brain loaded {} persisted triples ({} associations, {} concepts)",
+                    triples.len(), knowledge.num_associations(), knowledge.num_concepts());
             }
-        }
+            triples
+        } else {
+            Vec::new()
+        };
 
         let (triple_sender, triple_receiver) = crossbeam::channel::unbounded();
 
-        Self {
+        let mut brain = Self {
             network: net,
             visual_encoder: LatencyEncoder::new(384, 20),
             audio_encoder: LatencyEncoder::new(512, 20),
@@ -116,7 +119,13 @@ impl SpikingBrain {
             learn_queue: Vec::new(),
             triple_sender,
             triple_receiver,
+        };
+
+        for triple in &loaded_triples {
+            brain.imprint_synapses(triple);
         }
+
+        brain
     }
 
     /// Create with just the association cortex (backward compat).
@@ -124,16 +133,19 @@ impl SpikingBrain {
         let net = regions::association::build_association_cortex(n_assoc, 0.05);
         let half = n_assoc / 2;
         let mut knowledge = KnowledgeEngine::new(0, n_assoc, 100);
-        if let Some(ref dir) = data_dir {
+        let loaded_triples = if let Some(ref dir) = data_dir {
             knowledge.set_data_dir(dir);
-            let loaded = knowledge.load_from_file(&dir.join("triples.log"));
-            if loaded > 0 {
-                tracing::info!("Spiking brain loaded {loaded} persisted triples ({} associations, {} concepts)",
-                    knowledge.num_associations(), knowledge.num_concepts());
+            let triples = knowledge.load_from_file(&dir.join("triples.log"));
+            if !triples.is_empty() {
+                tracing::info!("Spiking brain loaded {} persisted triples ({} associations, {} concepts)",
+                    triples.len(), knowledge.num_associations(), knowledge.num_concepts());
             }
-        }
+            triples
+        } else {
+            Vec::new()
+        };
         let (triple_sender, triple_receiver) = crossbeam::channel::unbounded();
-        Self {
+        let mut brain = Self {
             network: net,
             visual_encoder: LatencyEncoder::new(half.min(512), 20),
             audio_encoder: LatencyEncoder::new(half.min(512), 20),
@@ -146,7 +158,13 @@ impl SpikingBrain {
             learn_queue: Vec::new(),
             triple_sender,
             triple_receiver,
+        };
+
+        for triple in &loaded_triples {
+            brain.imprint_synapses(triple);
         }
+
+        brain
     }
 
     pub fn process_visual(&mut self, embedding: &[f32]) {

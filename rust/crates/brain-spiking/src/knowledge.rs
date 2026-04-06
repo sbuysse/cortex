@@ -66,22 +66,22 @@ impl KnowledgeEngine {
     }
 
     /// Replay a persisted `triples.log` into this engine (no disk writes).
-    /// Returns the number of triples loaded.
-    pub fn load_from_file(&mut self, path: &Path) -> usize {
+    /// Returns the triples that were loaded.
+    pub fn load_from_file(&mut self, path: &Path) -> Vec<Triple> {
         let file = match File::open(path) {
             Ok(f) => f,
-            Err(_) => return 0,
+            Err(_) => return Vec::new(),
         };
-        let mut count = 0;
+        let mut triples = Vec::new();
         for line in BufReader::new(file).lines().map_while(Result::ok) {
             let parts: Vec<&str> = line.splitn(5, '|').collect();
             if parts.len() < 3 { continue; }
             let triple = Triple::new(parts[0], parts[1], parts[2]);
             let topic = if parts.len() >= 4 { parts[3] } else { "" };
             self.learn_triple_inner(&triple, topic);
-            count += 1;
+            triples.push(triple);
         }
-        count
+        triples
     }
 
     // -----------------------------------------------------------------------

@@ -31,7 +31,7 @@ fn test_persist_and_reload_triples() {
         let log_path = dir.path().join("triples.log");
         let loaded = engine.load_from_file(&log_path);
 
-        assert_eq!(loaded, 2, "expected 2 triples loaded from disk");
+        assert_eq!(loaded.len(), 2, "expected 2 triples loaded from disk");
         assert!(engine.num_associations() > 0, "associations should be non-zero after reload");
         assert!(engine.num_concepts() >= 4, "at least rust, is, language, neuron should be registered");
 
