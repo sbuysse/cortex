@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cortex — Spiking Brain Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/cortex.css">
+</head>
+<body>
+
+<!-- ── Top Bar ──────────────────────────────────────────────────── -->
+<header id="top-bar">
+  <div class="logo">CORTEX <span>Spiking Brain Explorer</span></div>
+  <div class="stat-badges">
+    <div class="stat-badge">
+      <span class="dot dot-green"></span>
+      <span class="value" id="stat-topics">-</span> topics
+    </div>
+    <div class="stat-badge">
+      <span class="dot dot-blue"></span>
+      <span class="value" id="stat-concepts">-</span> concepts
+    </div>
+    <div class="stat-badge">
+      <span class="dot dot-purple"></span>
+      <span class="value" id="stat-associations">-</span> associations
+    </div>
+  </div>
+  <div class="neuron-info">
+    <span class="value" id="neuron-count">2.0M</span> neurons
+  </div>
+</header>
+
+<!-- ── 3D Canvas ───────────────────────────────────────────────── -->
+<div id="brain-canvas"></div>
+
+<!-- ── Panel Tabs ──────────────────────────────────────────────── -->
+<nav class="panel-tabs">
+  <button class="panel-tab" data-panel="knowledge-panel">Knowledge</button>
+  <button class="panel-tab" data-panel="regions-panel">Regions</button>
+  <button class="panel-tab" data-panel="stats-panel">Stats</button>
+</nav>
+
+<!-- ── Slide Panels ────────────────────────────────────────────── -->
+<aside id="knowledge-panel" class="slide-panel">
+  <h3>Knowledge Graph</h3>
+  <div class="panel-content" id="knowledge-content">
+    <p class="text-dim">Loading...</p>
+  </div>
+</aside>
+
+<aside id="regions-panel" class="slide-panel">
+  <h3>Brain Regions</h3>
+  <div class="panel-content" id="regions-content">
+    <p class="text-dim">Loading...</p>
+  </div>
+</aside>
+
+<aside id="stats-panel" class="slide-panel">
+  <h3>Statistics</h3>
+  <div class="panel-content" id="stats-content">
+    <p class="text-dim">Loading...</p>
+  </div>
+</aside>
+
+<!-- ── Float Cards ─────────────────────────────────────────────── -->
+<div id="response-card" class="float-card">
+  <button class="card-close" onclick="hideCard('response-card')">&times;</button>
+  <h4>Response</h4>
+  <div class="card-body" id="response-body"></div>
+</div>
+
+<div id="learning-card" class="float-card" style="top: calc(var(--top-bar-h) + 440px);">
+  <button class="card-close" onclick="hideCard('learning-card')">&times;</button>
+  <h4>Learning</h4>
+  <div class="card-body" id="learning-body"></div>
+</div>
+
+<!-- ── Input Bar ───────────────────────────────────────────────── -->
+<footer id="input-bar">
+  <input type="text" id="main-input" placeholder="Ask, learn a URL, or type /help..." autocomplete="off">
+  <button id="submit-btn" onclick="handleInput()">Send</button>
+</footer>
+
+<!-- ── Three.js Module ─────────────────────────────────────────── -->
+<script src="/static/cortex.js" type="module"></script>
+
+<!-- ── UI Logic ─────────────────────────────────────────────────── -->
+<script>
+(function() {
+  // ── Panel Toggle ──────────────────────────────────────────────
+  const tabs = document.querySelectorAll('.panel-tab');
+  const panels = document.querySelectorAll('.slide-panel');
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const targetId = tab.dataset.panel;
+      const panel = document.getElementById(targetId);
+      const isOpen = panel.classList.contains('open');
+
+      // Close all panels and deactivate tabs
+      panels.forEach(p => p.classList.remove('open'));
+      tabs.forEach(t => t.classList.remove('active'));
+
+      if (!isOpen) {
+        panel.classList.add('open');
+        tab.classList.add('active');
+        // Lazy-load panel content
+        if (targetId === 'knowledge-panel') loadKnowledgePanel();
+        else if (targetId === 'regions-panel') loadRegionsPanel();
+        else if (targetId === 'stats-panel') loadStatsPanel();
+      }
+    });
+  });
+
+  // ── Load Knowledge Panel ──────────────────────────────────────
+  async function loadKnowledgePanel() {
+    const el = document.getElementById('knowledge-content');
+    try {
+      const resp = await fetch('/api/brain/knowledge/stats');
+      if (!resp.ok) { el.innerHTML = '<p class="text-dim">No data</p>'; return; }
+      const data = await resp.json();
+
+      let html = '';
+      if (data.topics_list && data.topics_list.length) {
+        html += '<div class="mt-2">';
+        for (const t of data.topics_list) {
+          html += '<div class="panel-item">';
+          html += '<div class="label">' + escHtml(t.topic) + '</div>';
+          html += '<div class="value">' + t.count + ' concepts</div>';
+          html += '</div>';
+        }
+        html += '</div>';
+      } else {
+        html += '<p class="text-dim">No topics yet. Learn a URL to get started.</p>';
+      }
+      el.innerHTML = html;
+    } catch (e) {
+      el.innerHTML = '<p class="text-dim">Error loading knowledge</p>';
+    }
+  }
+
+  // ── Load Regions Panel ────────────────────────────────────────
+  async function loadRegionsPanel() {
+    const el = document.getElementById('regions-content');
+    const regionColors = {
+      visual_cortex: '#3b82f6', auditory_cortex: '#f59e0b', association_cortex: '#10b981',
+      predictive_cortex: '#06b6d4', hippocampus: '#a855f7', prefrontal_cortex: '#ef4444',
+      amygdala: '#f59e0b', motor_cortex: '#14b8a6', brainstem: '#8b5cf6', cerebellum: '#67e8f9',
+    };
+    try {
+      const resp = await fetch('/api/brain/spiking/status');
+      if (!resp.ok) { el.innerHTML = '<p class="text-dim">Spiking brain not active</p>'; return; }
+      const data = await resp.json();
+      const regions = data.regions || {};
+
+      let html = '';
+      for (const [name, info] of Object.entries(regions)) {
+        const color = regionColors[name] || '#888';
+        const rate = (info.avg_firing_rate || 0).toFixed(1);
+        html += '<div class="region-item">';
+        html += '<span class="region-dot" style="background:' + color + '"></span>';
+        html += '<span class="region-name">' + escHtml(name.replace(/_/g, ' ')) + '</span>';
+        html += '<span class="region-rate">' + rate + ' Hz</span>';
+        html += '</div>';
+      }
+      el.innerHTML = html || '<p class="text-dim">No region data</p>';
+    } catch (e) {
+      el.innerHTML = '<p class="text-dim">Error loading regions</p>';
+    }
+  }
+
+  // ── Load Stats Panel ──────────────────────────────────────────
+  async function loadStatsPanel() {
+    const el = document.getElementById('stats-content');
+    try {
+      const [statsResp, spikingResp] = await Promise.all([
+        fetch('/api/brain/knowledge/stats'),
+        fetch('/api/brain/spiking/status'),
+      ]);
+
+      let html = '';
+
+      if (statsResp.ok) {
+        const s = await statsResp.json();
+        html += '<div class="panel-item"><div class="label">Topics</div><div class="value text-green">' + (s.topics ?? '-') + '</div></div>';
+        html += '<div class="panel-item"><div class="label">Concepts</div><div class="value text-blue">' + (s.concepts ?? '-') + '</div></div>';
+        html += '<div class="panel-item"><div class="label">Associations</div><div class="value text-purple">' + (s.associations ?? '-') + '</div></div>';
+      }
+
+      if (spikingResp.ok) {
+        const sp = await spikingResp.json();
+        html += '<div class="panel-item"><div class="label">Neurons</div><div class="value text-green">' + (sp.total_neurons ? (sp.total_neurons / 1e6).toFixed(1) + 'M' : '-') + '</div></div>';
+        html += '<div class="panel-item"><div class="label">Connections</div><div class="value text-blue">' + (sp.total_connections ? (sp.total_connections / 1e9).toFixed(1) + 'B' : '-') + '</div></div>';
+        if (sp.modulators) {
+          html += '<div class="mt-4"><div class="label mb-2">Neuromodulators</div>';
+          for (const [name, val] of Object.entries(sp.modulators)) {
+            html += '<div class="region-item"><span class="region-name text-dim">' + escHtml(name) + '</span><span class="region-rate">' + Number(val).toFixed(3) + '</span></div>';
+          }
+          html += '</div>';
+        }
+      }
+
+      el.innerHTML = html || '<p class="text-dim">No stats available</p>';
+    } catch (e) {
+      el.innerHTML = '<p class="text-dim">Error loading stats</p>';
+    }
+  }
+
+  // ── Input Handler ─────────────────────────────────────────────
+  const input = document.getElementById('main-input');
+  const btn = document.getElementById('submit-btn');
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleInput();
+  });
+
+  window.handleInput = async function() {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    btn.disabled = true;
+
+    try {
+      if (text.startsWith('http://') || text.startsWith('https://')) {
+        // URL -> Learn
+        const topic = window.prompt('Topic name for this URL:', '');
+        if (!topic) { btn.disabled = false; return; }
+        showCard('learning-card', '<div class="spinner"></div> Learning from URL...');
+        const resp = await fetch('/api/brain/learn/academic', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: text, topic: topic }),
+        });
+        const data = await resp.json();
+        const msg = data.error
+          ? '<span class="text-orange">Error: ' + escHtml(data.error) + '</span>'
+          : '<span class="text-green">Learned ' + (data.concepts_added || 0) + ' concepts</span> from <em>' + escHtml(topic) + '</em>';
+        showCard('learning-card', msg);
+        if (window.cortexLoadGraph) window.cortexLoadGraph();
+        if (window.cortexLoadStats) window.cortexLoadStats();
+      } else if (text.startsWith('/')) {
+        handleCommand(text);
+      } else {
+        // Ask the brain
+        showCard('response-card', '<div class="spinner"></div> Thinking...');
+
+        // Prime (fire once, ignore result)
+        fetch('/api/brain/dialogue/grounded', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: text }),
+        }).catch(() => {});
+
+        // Wait, then ask for real
+        await new Promise(r => setTimeout(r, 5000));
+        const resp = await fetch('/api/brain/dialogue/grounded', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: text }),
+        });
+        const data = await resp.json();
+
+        let html = '<div class="card-body">';
+        html += '<p>' + escHtml(data.response || data.text || 'No response') + '</p>';
+
+        // Confidence
+        if (data.confidence != null) {
+          const pct = Math.round(data.confidence * 100);
+          const cls = pct >= 70 ? 'confidence-high' : pct >= 40 ? 'confidence-mid' : 'confidence-low';
+          html += '<div class="confidence-bar ' + cls + ' mt-2"><div class="fill" style="width:' + pct + '%"></div></div>';
+          html += '<div class="mono text-dim mt-2" style="font-size:11px">' + pct + '% confidence</div>';
+        }
+
+        // Tags
+        if (data.source_types && data.source_types.length) {
+          html += '<div class="mt-2">';
+          for (const st of data.source_types) {
+            const cls = 'tag-' + (st === 'confirmed' ? 'confirmed' : st === 'explicit' ? 'explicit' : st === 'emergent' ? 'emergent' : 'predicted');
+            html += '<span class="tag ' + cls + '">' + escHtml(st) + '</span>';
+          }
+          html += '</div>';
+        }
+
+        // Associations
+        if (data.associations && data.associations.length) {
+          html += '<ul class="assoc-list mt-2">';
+          for (const a of data.associations) {
+            const label = a.label || a.concept || a;
+            const weight = a.weight != null ? a.weight.toFixed(2) : '';
+            html += '<li><span class="assoc-label">' + escHtml(String(label)) + '</span>';
+            if (weight) html += '<span class="assoc-weight">' + weight + '</span>';
+            html += '</li>';
+          }
+          html += '</ul>';
+          if (window.animateRecall) window.animateRecall(data.associations);
+        }
+
+        html += '</div>';
+        showCard('response-card', html);
+      }
+    } catch (e) {
+      showCard('response-card', '<span class="text-orange">Error: ' + escHtml(e.message) + '</span>');
+    }
+
+    btn.disabled = false;
+  };
+
+  // ── Commands ──────────────────────────────────────────────────
+  function handleCommand(cmd) {
+    const parts = cmd.split(/\s+/);
+    const name = parts[0].toLowerCase();
+
+    switch (name) {
+      case '/help':
+        showCard('response-card',
+          '<p class="mono" style="font-size:12px">' +
+          '<strong>/help</strong> — show this help<br>' +
+          '<strong>/topics</strong> — list learned topics<br>' +
+          '<strong>/stats</strong> — show brain statistics<br>' +
+          '<strong>/regions</strong> — show region firing rates<br>' +
+          '<strong>https://...</strong> — learn from URL<br>' +
+          '<strong>any text</strong> — ask the brain' +
+          '</p>');
+        break;
+      case '/topics':
+        document.querySelector('[data-panel="knowledge-panel"]').click();
+        break;
+      case '/stats':
+        document.querySelector('[data-panel="stats-panel"]').click();
+        break;
+      case '/regions':
+        document.querySelector('[data-panel="regions-panel"]').click();
+        break;
+      default:
+        showCard('response-card', '<span class="text-dim">Unknown command. Type /help for options.</span>');
+    }
+  }
+
+  // ── Card Show/Hide ────────────────────────────────────────────
+  window.showCard = function(id, html) {
+    const card = document.getElementById(id);
+    const body = card.querySelector('.card-body') || card.querySelector('#' + id.replace('-card', '-body'));
+    if (body) body.innerHTML = html;
+    card.classList.add('visible');
+  };
+
+  window.hideCard = function(id) {
+    document.getElementById(id).classList.remove('visible');
+  };
+
+  // ── Escape HTML ───────────────────────────────────────────────
+  function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+})();
+</script>
+
+</body>
+</html>
