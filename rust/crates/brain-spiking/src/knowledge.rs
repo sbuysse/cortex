@@ -477,4 +477,29 @@ impl KnowledgeEngine {
     pub fn stim_current(&self) -> f32 {
         self.stim_current
     }
+
+    /// Export the full knowledge graph for 3D visualization.
+    pub fn graph_data(&self) -> (Vec<(usize, String, Vec<String>, usize)>, Vec<(usize, usize, f32)>) {
+        let mut degree: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for &(from, to) in self.associations.keys() {
+            *degree.entry(from).or_insert(0) += 1;
+            *degree.entry(to).or_insert(0) += 1;
+        }
+
+        let mut nodes = Vec::new();
+        for name in self.registry.concept_names() {
+            if let Some(asm) = self.registry.get(name) {
+                let id = Self::concept_id(asm.start);
+                let topics = self.registry.get_topics(name);
+                let deg = degree.get(&id).copied().unwrap_or(0);
+                nodes.push((id, name.to_string(), topics, deg));
+            }
+        }
+
+        let edges: Vec<(usize, usize, f32)> = self.associations.iter()
+            .map(|(&(from, to), &weight)| (from, to, weight))
+            .collect();
+
+        (nodes, edges)
+    }
 }

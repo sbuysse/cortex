@@ -99,6 +99,7 @@ fn build_router(state: Arc<AppState>, static_dir: Option<&Path>) -> Router {
         .route("/api/brain/learn/academic", post(routes::api_brain_learn_academic))
         .route("/api/brain/learn/batch", post(routes::api_brain_learn_batch))
         .route("/api/brain/knowledge/stats", get(routes::api_brain_knowledge_stats))
+        .route("/api/brain/knowledge/graph", get(routes::api_brain_knowledge_graph))
         // Phase 2: Episodic Memory
         .route("/api/brain/episodes", get(routes::api_brain_episodes_native))
         .route("/api/brain/remember", post(routes::api_brain_remember))

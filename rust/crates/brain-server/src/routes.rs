@@ -4116,6 +4116,29 @@ pub async fn api_brain_learn_batch(
     }
 }
 
+/// Full knowledge graph for 3D visualization.
+pub async fn api_brain_knowledge_graph(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if let Some(brain) = &state.brain {
+        if let Some(ref sb) = brain.spiking_brain {
+            let sb = sb.lock().unwrap();
+            let (nodes, edges) = sb.knowledge.graph_data();
+
+            let json_nodes: Vec<serde_json::Value> = nodes.iter().map(|(id, name, topics, degree)| {
+                serde_json::json!({"id": id, "name": name, "topics": topics, "degree": degree})
+            }).collect();
+
+            let json_edges: Vec<serde_json::Value> = edges.iter().map(|(from, to, weight)| {
+                serde_json::json!({"from": from, "to": to, "weight": weight})
+            }).collect();
+
+            return Json(serde_json::json!({"nodes": json_nodes, "edges": json_edges})).into_response();
+        }
+    }
+    Json(serde_json::json!({"nodes": [], "edges": []})).into_response()
+}
+
 /// Knowledge graph statistics — topics, concepts, bridges.
 pub async fn api_brain_knowledge_stats(
     State(state): State<Arc<AppState>>,
