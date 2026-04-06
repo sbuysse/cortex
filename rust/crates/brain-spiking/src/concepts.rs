@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A cell assembly: a dedicated population of neurons representing one concept.
 #[derive(Debug, Clone)]
@@ -27,6 +27,8 @@ pub struct ConceptRegistry {
     max_neurons: usize,
     /// Neurons per concept assembly.
     assembly_size: usize,
+    /// Concept name → set of topics that mention this concept.
+    topic_provenance: HashMap<String, HashSet<String>>,
 }
 
 impl ConceptRegistry {
@@ -36,6 +38,7 @@ impl ConceptRegistry {
             next_neuron: 0,
             max_neurons,
             assembly_size,
+            topic_provenance: HashMap::new(),
         }
     }
 
@@ -96,6 +99,44 @@ impl ConceptRegistry {
             }
         }
         None
+    }
+
+    /// Record that `concept` appeared in `topic`.
+    pub fn add_topic(&mut self, concept: &str, topic: &str) {
+        self.topic_provenance
+            .entry(concept.to_string())
+            .or_default()
+            .insert(topic.to_string());
+    }
+
+    /// Topics that mention a given concept.
+    pub fn get_topics(&self, concept: &str) -> Vec<String> {
+        self.topic_provenance
+            .get(concept)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// All distinct topics across all concepts.
+    pub fn all_topics(&self) -> Vec<String> {
+        let mut topics: HashSet<String> = HashSet::new();
+        for set in self.topic_provenance.values() {
+            topics.extend(set.iter().cloned());
+        }
+        let mut v: Vec<String> = topics.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    /// Concepts that appear in two or more distinct topics ("bridge" concepts).
+    pub fn bridge_concepts(&self) -> Vec<String> {
+        let mut bridges: Vec<String> = self.topic_provenance
+            .iter()
+            .filter(|(_, topics)| topics.len() >= 2)
+            .map(|(concept, _)| concept.clone())
+            .collect();
+        bridges.sort();
+        bridges
     }
 }
 
