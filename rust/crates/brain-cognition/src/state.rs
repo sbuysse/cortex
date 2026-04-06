@@ -201,18 +201,20 @@ impl BrainState {
                         continue;
                     }
 
-                    // Check for triples in external queue (no brain lock needed)
-                    let triple = {
+                    // Drain ALL triples from external queue in one batch
+                    let triples: Vec<_> = {
                         let mut q = tq_clone.lock().unwrap();
-                        q.pop()
+                        q.drain(..).collect()
                     };
-                    if let Some(triple) = triple {
+                    if !triples.is_empty() {
                         let t0 = std::time::Instant::now();
-                        tracing::info!("Learning triple: ({}, {}, {})", triple.subject, triple.relation, triple.object);
+                        let count = triples.len();
                         let mut sb = sb_clone.lock().unwrap();
-                        sb.learn_triple(&triple);
+                        for triple in &triples {
+                            sb.learn_triple(triple);
+                        }
                         let elapsed = t0.elapsed().as_secs_f32();
-                        tracing::info!("Triple learned in {:.1}s", elapsed);
+                        tracing::info!("Learned {} triples in {:.3}s", count, elapsed);
                         drop(sb);
                         continue;
                     }

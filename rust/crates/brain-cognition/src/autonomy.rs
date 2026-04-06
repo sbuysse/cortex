@@ -623,9 +623,104 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
     tracing::info!("Academic learn: extracted {} concepts: {:?}",
         all_concepts.len(), &all_concepts[..all_concepts.len().min(5)]);
 
-    // 5. Feed NOVEL concepts into spiking brain + all concepts into KG
-    // Only novel concepts (from video transcript) go into the brain's concept memory.
-    // Audio codebook matches (Coo, Cymbal, etc.) are noise and excluded.
+    // 5. Extract knowledge triples using LLM (high quality).
+    // Spawn a background task so the main function can return immediately.
+    let ollama_url = if brain.config.ollama_url.contains("/api/") {
+        brain.config.ollama_url.clone()
+    } else {
+        format!("{}/api/generate", brain.config.ollama_url)
+    };
+    let ollama_model = brain.config.ollama_model.clone();
+    let triple_queue = brain.triple_queue.clone();
+    let topic_key_owned = topic_key.clone();
+    let owned_sentences: Vec<String> = sentences.iter().take(50).map(|s| s.to_string()).collect();
+    let sentence_count = owned_sentences.len();
+
+    tokio::spawn(async move {
+        let t0 = std::time::Instant::now();
+        let mut all_triples: Vec<brain_spiking::Triple> = Vec::new();
+
+        let batch_size = 10;
+        for chunk in owned_sentences.chunks(batch_size) {
+            let numbered: String = chunk.iter().enumerate()
+                .map(|(i, s)| format!("{}. {}", i + 1, s))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let prompt = format!(
+                "From these sentences about \"{topic}\", extract factual claims as subject|verb|object triples.\n\
+                 Example: {topic}|compresses|KV cache\n\
+                 Example: {topic}|reduces|memory usage by 4x\n\
+                 Example: quantization|converts|floating point to integer\n\n\
+                 Output ONLY triples, one per line. No explanations.\n\n\
+                 {numbered}\n",
+                topic = topic_key_owned, numbered = numbered
+            );
+
+            let client = reqwest::Client::new();
+            let body = serde_json::json!({
+                "model": &ollama_model,
+                "prompt": prompt,
+                "stream": false,
+                "options": {"temperature": 0.1, "num_predict": 400},
+            });
+
+            match client.post(&ollama_url).json(&body)
+                .timeout(std::time::Duration::from_secs(30))
+                .send().await
+            {
+                Ok(resp) => {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        let text = json["response"].as_str().unwrap_or("");
+                        for line in text.lines() {
+                            let line = line.trim().trim_start_matches(|c: char| c.is_numeric() || c == '.' || c == '-' || c == ' ');
+                            let parts: Vec<&str> = line.splitn(3, '|').collect();
+                            if parts.len() == 3 {
+                                let s = parts[0].trim().to_lowercase();
+                                let r = parts[1].trim().to_lowercase();
+                                let o = parts[2].trim().to_lowercase();
+                                if s.len() > 2 && r.len() > 1 && o.len() > 2 {
+                                    all_triples.push(brain_spiking::Triple::new(&s, &r, &o));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("LLM triple extraction batch failed: {e}");
+                    for sentence in chunk {
+                        let triples = brain_spiking::extract_triples_with_topic(sentence, &topic_key_owned);
+                        all_triples.extend(triples);
+                    }
+                }
+            }
+        }
+
+        // Filter noise and deduplicate
+        all_triples.retain(|t| {
+            // Reject if any field contains prompt echoes
+            let fields = [&t.subject, &t.relation, &t.object];
+            let noise = ["example", "triple", "sentence", "output", "extract",
+                "rule", "fact", "claim", "given", "according"];
+            !fields.iter().any(|f| noise.iter().any(|n| f.contains(n)))
+                && t.object.len() > 2
+                && t.subject.len() > 2
+                && t.object.split_whitespace().count() <= 8 // reject long rambling objects
+        });
+        let mut seen = std::collections::HashSet::new();
+        all_triples.retain(|t| seen.insert(format!("{}|{}|{}", t.subject, t.relation, t.object)));
+
+        let count = all_triples.len();
+        if count > 0 {
+            let mut queue = triple_queue.lock().unwrap();
+            for triple in all_triples {
+                queue.push(triple);
+            }
+            tracing::info!("LLM extracted {} triples from {} sentences in {:.1}s (queue size: {})",
+                count, sentence_count, t0.elapsed().as_secs_f32(), queue.len());
+        }
+    });
+
     let novel_labels: std::collections::HashSet<String> = novel_concepts.iter()
         .map(|(l, _)| l.clone())
         .collect();
@@ -635,19 +730,6 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
     for concept in &all_concepts {
         if let Ok(t_emb) = te.encode(concept) {
             let t_proj = mlp.project_visual(&t_emb);
-
-            // Extract triples and enqueue for background learning
-            if novel_labels.contains(concept) {
-                let triples = brain_spiking::extract_triples_with_topic(concept, &topic_key);
-                if !triples.is_empty() {
-                    let mut queue = brain.triple_queue.lock().unwrap();
-                    for triple in &triples {
-                        queue.push(triple.clone());
-                    }
-                    tracing::info!("Enqueued {} triples (queue size: {})",
-                        triples.len(), queue.len());
-                }
-            }
 
             // Store KG edges: topic → has-concept → concept
             let _ = brain.memory_db.upsert_edge(query, "has-concept", concept, 0.7);

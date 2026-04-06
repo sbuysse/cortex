@@ -4,9 +4,9 @@ A cognitive architecture in Rust combining spiking neural networks with foundati
 
 ## Overview
 
-Cortex is a research platform for studying how spiking neural dynamics can form associative knowledge from multimodal input. It encodes perception (DINOv2, CLIP, Whisper, MiniLM) into spike trains, learns associations through spike-timing-dependent plasticity, and recalls knowledge through chain propagation across brain regions.
+Cortex is a research platform for studying how spiking neural dynamics can form associative knowledge from multimodal input. It encodes perception (DINOv2, CLIP, Whisper, MiniLM) into spike trains, learns associations through concept-level association matrices, and recalls knowledge through BFS chain propagation across brain regions.
 
-The system can watch YouTube videos, extract subject-verb-object triples from transcripts, encode them as sequential STDP patterns in cell assemblies, and recall associated concepts through learned synaptic pathways — without storing any text.
+The system can watch YouTube videos, extract knowledge triples from transcripts using LLM-powered extraction, encode them as concept associations in the spiking brain, and recall associated concepts through learned pathways — without storing any text.
 
 ## Architecture
 
@@ -57,22 +57,23 @@ The system can watch YouTube videos, extract subject-verb-object triples from tr
 ```
 YouTube video
   → yt-dlp auto-subtitles
-  → Sentence chunking (~200 chars)
-  → SVO triple extraction (rule-based, with pronoun resolution)
-  → Sequential STDP encoding:
-      Subject neurons (20 steps) → Relation neurons (20 steps) → Object neurons (20 steps)
-      Repeated 3x per triple
-  → Synaptic weights encode directional associations
-  → No text stored — weights ARE the memory
+  → Sentence chunking (~200 chars, filler filtering)
+  → LLM-powered triple extraction (Ollama, batched):
+      "From these sentences about X, extract subject|verb|object triples"
+      e.g., TurboQuant|compresses|KV cache
+  → Batch learning: all triples encoded in one tick (~0ms)
+  → Concept association matrix: S→R, R→O, S→O edges strengthened
+  → No text stored — association weights ARE the memory
 ```
 
 ### Recall
 
 ```
-Query → Fuzzy concept matching → Activate matching cell assemblies
-  → Free propagation through learned connections (up to 30 steps, early stopping)
-  → Read activated populations in PFC + Hippocampus
-  → Chain of associated concepts returned
+Query → Fuzzy concept matching → Find matching cell assemblies
+  → BFS through concept association graph (up to 6 hops)
+  → Follow strongest weighted edges, filter noise concepts
+  → Chain of associated concepts returned with strength scores
+  → Injected into LLM system prompt as learned knowledge
 ```
 
 ## Experiment: Learning TurboQuant from a YouTube Video
@@ -82,35 +83,48 @@ To validate the architecture, we taught Cortex about [TurboQuant](https://arxiv.
 **Step 1: Ask the raw LLM (no Cortex)**
 ```
 Q: "How does TurboQuant reduce memory usage?"
-A: "I don't have specific knowledge about TurboQuant..."
+A: "I don't have specific information about TurboQuant..."
 ```
 
 **Step 2: Teach Cortex by watching a YouTube video**
 ```bash
 curl -X POST /api/brain/learn/academic \
-  -d '{"query": "https://www.youtube.com/watch?v=7YVrb3-ABYE", "topic": "turboquant"}'
-# → 53 concepts extracted, 27 triples learned via STDP
+  -d '{"query": "https://www.youtube.com/watch?v=7YVrb3-ABYE", "topic": "TurboQuant"}'
+# → 50 sentences processed, 12 triples extracted via LLM, learned in 0ms
 ```
 
-The system extracts triples like `(turboquant, compresses, cache systems)` and `(turboquant, is, short-term memory models)` from the transcript, then encodes each as a sequential STDP pattern in cell assemblies. Learning takes ~45 minutes at 2B connections (90 seconds per triple × 27 triples).
+The LLM extracts precise triples like `TurboQuant|compresses|KV cache` and `TurboQuant|reduces|short-term memory of models` from the transcript. All 12 triples are batch-learned in a single tick (~0ms). Total learning time: ~10 seconds.
 
 **Step 3: Ask Cortex**
 ```
 Q: "How does TurboQuant reduce memory usage?"
 
-Brain associations (from STDP recall, strength scores):
-  - cache systems like large (144)
-  - short-term memory models (143)
-  - total game changer (145)
-  - points mostly along one axis (144)
+Brain associations (from chain recall, strength scores):
+  - kv cache (80)
+  - short-term memory of models (80)
+  - short-term memory of an ai assistant (80)
+  - stock price (80)
+  - moves (80)
 
-A: "TurboQuant appears to focus on efficient memory management,
-    possibly through its cache systems and short-term memory models,
-    which are designed to optimize the use of available resources
-    without compromising performance."
+A: "TurboQuant optimizes memory usage by employing techniques like
+    kv cache management and efficient short-term memory handling of
+    AI models, which allows it to operate more effectively without
+    overloading its resources. This means it can process information
+    and make predictions about stock prices or other data-intensive
+    tasks with reduced memory overhead."
 ```
 
-The LLM now answers using knowledge from the video — "cache systems" and "short-term memory models" come from the brain's STDP-learned associations, not from the LLM's training data. The spiking brain decides what to recall; the LLM turns it into language.
+The LLM now answers using knowledge from the video — "kv cache", "short-term memory of models", and "stock price" come from the brain's learned associations, not from the LLM's training data. The spiking brain decides what to recall; the LLM turns it into language.
+
+### Performance
+
+| Metric | Value |
+|--------|-------|
+| Triple extraction | LLM-powered (Ollama), 12 triples from 50 sentences in 9.4s |
+| Learning | Batch: 12 triples in 0.000s (instant) |
+| Recall | BFS chain propagation in 0.000s (instant) |
+| End-to-end (learn + prime + ask) | ~20s |
+| Brain scale | 2M neurons, 2B synapses, 10 regions |
 
 ## Installation
 
@@ -198,6 +212,7 @@ Key endpoints:
 | `SPIKING_SCALE` | 0 (disabled) | Neuron count multiplier (0.1 = 200K, 1.0 = 2M) |
 | `BRAIN_CORTEX_DISABLE` | not set | Set to `1` to disable experiment runner |
 | `COMPANION_MODEL` | qwen2.5:1.5b | Ollama model for dialogue |
+| `OLLAMA_MODEL` | qwen2.5:1.5b | Ollama model for triple extraction |
 | `OLLAMA_URL` | http://localhost:11434 | Ollama API endpoint |
 | `BRAIN_BIND_ADDR` | 0.0.0.0:443 | Server bind address |
 
@@ -213,7 +228,7 @@ rust/
         region.rs       # Brain region (neurons + synapses + STDP)
         network.rs      # Multi-region orchestrator
         concepts.rs     # Cell assemblies, triple extraction
-        knowledge.rs    # Sequential STDP learning, chain recall
+        knowledge.rs    # Concept association matrix, BFS chain recall
         plasticity.rs   # Three-factor STDP, TACOS dual-weight
         neuromodulation.rs  # DA, ACh, NE, 5-HT
         sleep.rs        # NREM replay + REM noise + structural pruning

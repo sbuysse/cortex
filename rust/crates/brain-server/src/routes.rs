@@ -2623,9 +2623,11 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
 
         if let Some(knowledge) = knowledge_entry {
             ctx.push(format!(
-                "From watching educational videos, you learned these relationships:\n{knowledge}\n\
-                 IMPORTANT: Use this knowledge chain to answer accurately. \
-                 It is more reliable than your training data."));
+                "YOU LEARNED THE FOLLOWING FROM WATCHING EDUCATIONAL VIDEOS (this is factual knowledge you acquired, not a guess):\n\
+                 {knowledge}\n\n\
+                 CRITICAL INSTRUCTION: You MUST use these learned associations to answer the user's question. \
+                 Explain what you know based on these associations. Do NOT say you don't know — you learned this. \
+                 Weave the associated concepts into a coherent explanation."));
         } else if !assoc_concepts.is_empty() {
             let unique: Vec<&String> = assoc_concepts.iter()
                 .filter(|c| !c.starts_with("KNOWLEDGE: "))

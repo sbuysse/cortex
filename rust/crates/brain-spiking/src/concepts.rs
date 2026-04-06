@@ -131,14 +131,8 @@ pub fn extract_triples_with_topic(sentence: &str, topic: &str) -> Vec<Triple> {
         }
     };
 
-    let words: Vec<&str> = resolved.split_whitespace().collect();
-    if words.len() < 3 { return vec![]; }
-
-    let mut triples = Vec::new();
-    let sentence = &resolved;
-
     // Common relation verbs
-    let relation_verbs = [
+    let relation_verbs: &[&str] = &[
         "is", "are", "was", "were", "uses", "use", "using",
         "compresses", "compress", "compressing",
         "reduces", "reduce", "reducing",
@@ -164,21 +158,115 @@ pub fn extract_triples_with_topic(sentence: &str, topic: &str) -> Vec<Triple> {
         "called", "known", "means", "works",
     ];
 
-    // Find verb positions
+    let stop_words: &[&str] = &["the", "a", "an", "of", "in", "on", "at", "to",
+        "for", "by", "with", "from", "this", "that", "it", "its",
+        "and", "or", "but", "so", "if", "as", "is", "was", "are",
+        "very", "really", "just", "well", "also", "even", "about",
+        "not", "can", "will", "would", "could", "should", "been",
+        "have", "has", "had", "there", "here", "what", "when",
+        "how", "why", "who", "which", "where", "then", "than",
+        "more", "most", "some", "any", "all", "each", "every",
+        "much", "many", "few", "only", "own", "same", "other"];
+
+    // Words that indicate noise subjects (filler, channel intros, meta-commentary)
+    let noise_starts: &[&str] = &["well", "true", "false", "yes", "no", "dear", "hello",
+        "okay", "right", "sure", "look", "see", "now", "hey", "wow",
+        "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "unless", "because", "although", "however", "actually", "basically",
+        "obviously", "clearly", "literally", "number", "part", "moved",
+        "caught", "news", "scholars", "fellow", "friends", "guys", "folks",
+        "you", "they", "eye", "numbers", "relate", "mean", "means",
+        "let", "think", "say", "know", "want", "need", "try", "make"];
+
+    let topic_lower = topic.to_lowercase();
+
+    // Split on sentence boundaries to handle multi-sentence chunks
+    let sentences: Vec<&str> = resolved.split(|c: char| c == '.' || c == '!' || c == '?')
+        .map(|s| s.trim())
+        .filter(|s| s.split_whitespace().count() >= 4)
+        .collect();
+
+    let mut all_triples = Vec::new();
+    for sent in &sentences {
+        let sent_triples = extract_triples_from_sentence(sent, &topic_lower, stop_words, relation_verbs, noise_starts);
+        all_triples.extend(sent_triples);
+    }
+    // Also try the whole resolved text as one pass
+    if sentences.len() <= 1 {
+        let words: Vec<&str> = resolved.split_whitespace().collect();
+        if words.len() >= 4 {
+            let sent_triples = extract_triples_from_sentence(&resolved, &topic_lower, stop_words, relation_verbs, noise_starts);
+            all_triples.extend(sent_triples);
+        }
+    }
+
+    // Topic-anchored extraction: if the text mentions the topic, extract key phrases
+    // as (topic, "relates-to", phrase) triples. This catches information that SVO misses.
+    if !topic_lower.is_empty() {
+        let text_lower = resolved.to_lowercase();
+        if text_lower.contains(&topic_lower) || {
+            // Also match if first word was a pronoun that got resolved
+            let first_word = sentence.split_whitespace().next().unwrap_or("").to_lowercase();
+            pronouns.contains(&first_word.as_str())
+        } {
+            // Extract multi-word technical terms (2-4 word phrases not in stop words)
+            let words: Vec<&str> = resolved.split_whitespace().collect();
+            let mut i = 0;
+            while i < words.len() {
+                let mut phrase_words = Vec::new();
+                let mut j = i;
+                while j < words.len() && phrase_words.len() < 4 {
+                    let w = words[j].to_lowercase();
+                    let clean = w.trim_matches(|c: char| !c.is_alphanumeric());
+                    if clean.len() > 2 && !stop_words.contains(&clean)
+                        && !clean.eq_ignore_ascii_case(&topic_lower) {
+                        phrase_words.push(clean.to_string());
+                    } else if !phrase_words.is_empty() {
+                        break;
+                    }
+                    j += 1;
+                }
+                if phrase_words.len() >= 2 {
+                    let phrase = phrase_words.join(" ");
+                    // Only keep phrases with at least one word > 4 chars (substantive)
+                    if phrase_words.iter().any(|w| w.len() > 4) {
+                        all_triples.push(Triple::new(&topic_lower, "relates-to", &phrase));
+                    }
+                }
+                i = if j > i { j } else { i + 1 };
+            }
+        }
+    }
+
+    // Deduplicate
+    let mut seen = std::collections::HashSet::new();
+    all_triples.retain(|t| seen.insert(format!("{}|{}|{}", t.subject, t.relation, t.object)));
+    all_triples
+}
+
+fn extract_triples_from_sentence(
+    sentence: &str,
+    topic_lower: &str,
+    stop_words: &[&str],
+    relation_verbs: &[&str],
+    noise_starts: &[&str],
+) -> Vec<Triple> {
+    let words: Vec<&str> = sentence.split_whitespace().collect();
+    let mut triples = Vec::new();
+
     for (i, word) in words.iter().enumerate() {
         let lower = word.to_lowercase();
         let clean = lower.trim_matches(|c: char| !c.is_alphanumeric());
 
-        if relation_verbs.contains(&clean.as_ref()) && i > 0 && i < words.len() - 1 {
-            let stop_words = ["the", "a", "an", "of", "in", "on", "at", "to",
-                "for", "by", "with", "from", "this", "that", "it", "its",
-                "and", "or", "but", "so", "if", "as", "is", "was", "are",
-                "very", "really", "just", "well", "also", "even", "about"];
-
+        if relation_verbs.contains(&clean) && i > 0 && i < words.len() - 1 {
             // Subject: words before the verb (last 1-3 meaningful words)
             let subject_words: Vec<&str> = words[..i].iter()
                 .rev()
-                .filter(|w| w.len() > 2 && !stop_words.contains(&w.to_lowercase().as_str()))
+                .filter(|w| {
+                    let lw = w.to_lowercase();
+                    let cleaned = lw.trim_matches(|c: char| !c.is_alphanumeric());
+                    cleaned.len() > 2 && !stop_words.contains(&cleaned)
+                })
                 .take(3)
                 .copied()
                 .collect::<Vec<_>>()
@@ -189,21 +277,61 @@ pub fn extract_triples_with_topic(sentence: &str, topic: &str) -> Vec<Triple> {
             // Object: words after the verb (first 1-4 meaningful words)
             let object_words: Vec<&str> = words[i+1..]
                 .iter()
-                .filter(|w| w.len() > 2 && !stop_words.contains(&w.to_lowercase().as_str()))
+                .filter(|w| {
+                    let lw = w.to_lowercase();
+                    let cleaned = lw.trim_matches(|c: char| !c.is_alphanumeric());
+                    cleaned.len() > 2 && !stop_words.contains(&cleaned)
+                })
                 .take(4)
                 .copied()
                 .collect();
 
-            if !subject_words.is_empty() && !object_words.is_empty() {
-                let subject = subject_words.join(" ").to_lowercase();
-                let object = object_words.join(" ").to_lowercase();
-                let relation = clean.to_string();
-
-                // Skip trivial subjects/objects
-                if subject.len() > 2 && object.len() > 2 {
-                    triples.push(Triple::new(&subject, &relation, &object));
-                }
+            if subject_words.is_empty() || object_words.is_empty() {
+                continue;
             }
+
+            let subject = subject_words.join(" ").to_lowercase()
+                .trim_matches(|c: char| !c.is_alphanumeric() && c != ' ')
+                .to_string();
+            let object = object_words.join(" ").to_lowercase()
+                .trim_matches(|c: char| !c.is_alphanumeric() && c != ' ')
+                .to_string();
+            let relation = clean.to_string();
+
+            // Quality filters
+            if subject.len() < 3 || object.len() < 3 { continue; }
+
+            // Reject noise subjects
+            let first_subj_word = subject.split_whitespace().next().unwrap_or("");
+            if noise_starts.contains(&first_subj_word) { continue; }
+
+            // Reject if subject or object contains commas (fragmented parse)
+            if subject.contains(',') || object.contains(',') { continue; }
+
+            // Reject if subject == object
+            if subject == object { continue; }
+
+            // Reject if subject or object is just a single common word
+            let single_junk = ["thing", "stuff", "way", "lot", "kind", "sort",
+                "bit", "point", "fact", "case", "time", "day", "minute",
+                "people", "something", "someone", "anything", "everything",
+                "paper", "video", "channel", "talk", "question", "answer",
+                "gamechanger", "gamecher", "game", "huge", "total", "controversy",
+                "points", "mostly", "along"];
+            if single_junk.contains(&subject.as_str()) || single_junk.contains(&object.as_str()) {
+                continue;
+            }
+
+            // Boost: if subject matches topic, always accept
+            let topic_match = !topic_lower.is_empty() &&
+                (subject.contains(topic_lower) || topic_lower.contains(&subject));
+
+            // For non-topic subjects, require at least 2 meaningful words in object
+            if !topic_match && object.split_whitespace().count() < 2 {
+                continue;
+            }
+
+            triples.push(Triple::new(&subject, &relation, &object));
         }
     }
 

@@ -110,6 +110,19 @@ impl KnowledgeEngine {
             }
         }
 
+        // Filter noise: relation verbs and short generic terms shouldn't appear as associations
+        let noise_concepts = ["is", "are", "was", "were", "relates-to", "has", "have",
+            "uses", "use", "called", "known", "means", "works",
+            "compresses", "reduces", "enables", "provides", "creates",
+            "converts", "stores", "processes", "improves", "requires",
+            "replaces", "achieves", "represents", "contains", "produces",
+            "maintains", "generates", "supports", "implements", "optimizes",
+            "transforms", "currently talking", "numbers relate", "these numbers"];
+        result.retain(|(name, _)| {
+            let lower = name.to_lowercase();
+            !noise_concepts.contains(&lower.as_str()) && lower.len() > 3
+        });
+
         result.truncate(10);
         result
     }
