@@ -791,6 +791,23 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
     }));
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    // Update topics.json registry
+    let topics_path = brain.config.project_root.join("data/topics.json");
+    let mut topic_list: Vec<serde_json::Value> = std::fs::read_to_string(&topics_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    topic_list.push(serde_json::json!({
+        "topic": topic_key,
+        "url": url,
+        "triples_count": pairs_generated,
+        "learned_at": ts,
+    }));
+    let _ = std::fs::create_dir_all(brain.config.project_root.join("data"));
+    let _ = std::fs::write(&topics_path, serde_json::to_string_pretty(&topic_list).unwrap_or_default());
+
     Ok(pairs_generated)
 }
 
