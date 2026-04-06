@@ -187,18 +187,80 @@ impl BrainState {
                     if let Some(concept) = recall_concept {
                         let t0 = std::time::Instant::now();
                         tracing::info!("Chain recall starting for: {}", concept);
+
                         let mut sb = sb_clone.lock().unwrap();
-                        let (chain, knowledge) = sb.recall_knowledge(&concept);
-                        let labels: Vec<String> = chain.iter().map(|(n, _)| n.clone()).collect();
+
+                        // Phase 1: BFS recall (instant)
+                        let (bfs_chain, knowledge) = sb.recall_knowledge(&concept);
+                        let bfs_labels: Vec<String> = bfs_chain.iter().map(|(n, _)| n.clone()).collect();
+
+                        // Phase 2: Spiking recall (fire seeds into network)
+                        let spiking_result = sb.run_spiking_recall();
+
+                        // Build snapshot
                         let mut snap = brain_spiking::BrainSnapshot::default();
                         snap.has_data = true;
-                        if !knowledge.is_empty() {
-                            snap.associated_labels.push(format!("KNOWLEDGE: {knowledge}"));
+
+                        if let Some((spiking_assoc, mode)) = spiking_result {
+                            snap.recall_mode = mode;
+                            snap.spiking_associations = spiking_assoc.clone();
+
+                            let spiking_names: std::collections::HashSet<String> =
+                                spiking_assoc.iter().map(|(n, _)| n.clone()).collect();
+                            let bfs_names: std::collections::HashSet<String> =
+                                bfs_chain.iter().map(|(n, _)| n.clone()).collect();
+
+                            let mut merged: Vec<(String, usize, &str)> = Vec::new();
+
+                            // Confirmed: in both
+                            for (name, bfs_w) in &bfs_chain {
+                                if spiking_names.contains(name) {
+                                    let spike_w = spiking_assoc.iter()
+                                        .find(|(n, _)| n == name)
+                                        .map(|(_, w)| *w).unwrap_or(0);
+                                    let weight = ((*bfs_w).max(spike_w) as f32 * 1.5) as usize;
+                                    merged.push((name.clone(), weight, "confirmed"));
+                                }
+                            }
+                            // Explicit: BFS only
+                            for (name, w) in &bfs_chain {
+                                if !spiking_names.contains(name) {
+                                    merged.push((name.clone(), *w, "explicit"));
+                                }
+                            }
+                            // Emergent: spiking only
+                            for (name, w) in &spiking_assoc {
+                                if !bfs_names.contains(name) {
+                                    let weight = (*w as f32 * 0.7) as usize;
+                                    merged.push((name.clone(), weight, "emergent"));
+                                }
+                            }
+
+                            merged.sort_by(|a, b| b.1.cmp(&a.1));
+                            merged.truncate(12);
+
+                            if !merged.is_empty() {
+                                let tagged: Vec<String> = merged.iter()
+                                    .map(|(name, strength, tag)| format!("[{tag}] {name} (strength: {strength})"))
+                                    .collect();
+                                let knowledge_tagged = format!("{} is associated with: {}",
+                                    concept, tagged.join(", "));
+                                snap.associated_labels.push(format!("KNOWLEDGE: {knowledge_tagged}"));
+                            }
+                            for (name, _, tag) in &merged {
+                                snap.associated_labels.push(format!("[{}] {}", tag, name));
+                            }
+                        } else {
+                            // No spiking results — BFS only (same as before)
+                            if !knowledge.is_empty() {
+                                snap.associated_labels.push(format!("KNOWLEDGE: {knowledge}"));
+                            }
+                            snap.associated_labels.extend(bfs_labels);
                         }
-                        snap.associated_labels.extend(labels);
+
                         drop(sb);
                         *snap_clone.lock().unwrap() = snap;
-                        tracing::info!("Chain recall done in {:.1}s: {}", t0.elapsed().as_secs_f32(), knowledge);
+                        tracing::info!("Recall done in {:.1}s", t0.elapsed().as_secs_f32());
                         continue;
                     }
 
