@@ -39,10 +39,14 @@ impl KnowledgeEngine {
 
     /// Configure persistence directory.  Opens (or creates) `triples.log` for appending.
     pub fn set_data_dir(&mut self, dir: &Path) {
+        let _ = std::fs::create_dir_all(dir);
         self.data_dir = Some(dir.to_path_buf());
         let path = dir.join("triples.log");
         match OpenOptions::new().create(true).append(true).open(&path) {
-            Ok(f) => self.writer = Some(BufWriter::new(f)),
+            Ok(f) => {
+                tracing::info!("KnowledgeEngine: persistence file opened at {}", path.display());
+                self.writer = Some(BufWriter::new(f));
+            }
             Err(e) => tracing::warn!("KnowledgeEngine: cannot open {}: {}", path.display(), e),
         }
     }

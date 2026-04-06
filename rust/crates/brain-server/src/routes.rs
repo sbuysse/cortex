@@ -4120,9 +4120,7 @@ pub async fn api_brain_knowledge_stats(
                 "total_concepts": sb.knowledge.num_concepts(),
                 "topics": topics,
                 "topic_details": topic_details,
-                "bridge_concepts": bridges.iter().take(10).map(|(name, topics)| {
-                    serde_json::json!({"concept": name, "topics": topics})
-                }).collect::<Vec<_>>(),
+                "bridge_concepts": bridges.iter().take(10).collect::<Vec<_>>(),
                 "top_connected": top_connected.iter().map(|(name, deg)| {
                     serde_json::json!({"concept": name, "degree": deg})
                 }).collect::<Vec<_>>(),
