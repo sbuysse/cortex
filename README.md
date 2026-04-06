@@ -169,6 +169,19 @@ The `[emergent]` associations were NOT learned from TurboQuant's video — they 
 | Spiking recall | 0.1s (30 steps through association cortex) |
 | Brain scale | 2M neurons, 2B synapses, 10 regions |
 
+## UI — Immersive 3D Brain Explorer
+
+Open `https://your-server:8443/` to access the brain explorer.
+
+- **Full-screen 3D brain** with 10 anatomically positioned regions that glow based on spike activity (Three.js)
+- **Knowledge graph** visible when zoomed in — 1000+ concept nodes colored by topic, connected by learned associations
+- **Ask questions** via the unified input bar — the brain animates during recall, response appears as a floating card with confidence tags
+- **Learn from YouTube** — paste a URL, the brain learns in real-time with progress animation
+- **Browse knowledge** — slide-out panels for topics, brain regions, and system stats
+- **Confidence visualization** — `[confirmed]` green, `[explicit]` blue, `[emergent]` purple, `[predicted]` orange
+
+Built with Three.js, vanilla JS, and Tailwind CSS. Single HTML page, no framework.
+
 ## Installation
 
 ### Prerequisites
