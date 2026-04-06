@@ -2622,12 +2622,22 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             .map(|c| c.trim_start_matches("KNOWLEDGE: ").to_string());
 
         if let Some(knowledge) = knowledge_entry {
+            let chain_lines: Vec<String> = assoc_concepts.iter()
+                .filter(|c| !c.starts_with("KNOWLEDGE: "))
+                .map(|c| format!("  - {c}"))
+                .collect();
+            let chain_text = if chain_lines.is_empty() {
+                knowledge.clone()
+            } else {
+                chain_lines.join("\n")
+            };
             ctx.push(format!(
                 "YOU LEARNED THE FOLLOWING FROM WATCHING EDUCATIONAL VIDEOS (this is factual knowledge you acquired, not a guess):\n\
-                 {knowledge}\n\n\
+                 {chain_text}\n\n\
                  CRITICAL INSTRUCTION: You MUST use these learned associations to answer the user's question. \
                  Explain what you know based on these associations. Do NOT say you don't know — you learned this. \
-                 Weave the associated concepts into a coherent explanation."));
+                 Weave the associated concepts into a coherent explanation. \
+                 If concepts come from different topics, explain how they connect."));
         } else if !assoc_concepts.is_empty() {
             let unique: Vec<&String> = assoc_concepts.iter()
                 .filter(|c| !c.starts_with("KNOWLEDGE: "))
@@ -4028,4 +4038,96 @@ pub async fn api_brain_spiking_status(State(state): State<Arc<AppState>>) -> imp
         }
     }
     Json(serde_json::json!({"active": false})).into_response()
+}
+
+/// Learn from multiple YouTube videos in sequence.
+pub async fn api_brain_learn_batch(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let videos = match body["videos"].as_array() {
+        Some(v) => v.clone(),
+        None => return Json(serde_json::json!({"error": "videos array required"})).into_response(),
+    };
+    if let Some(brain) = &state.brain {
+        let mut learned = 0;
+        let mut skipped = 0;
+        let mut total_triples = 0;
+
+        // Load existing topics to check for duplicates
+        let topics_path = brain.config.project_root.join("data/topics.json");
+        let existing_urls: std::collections::HashSet<String> = std::fs::read_to_string(&topics_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+            .map(|arr| arr.iter().filter_map(|v| v["url"].as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        for video in &videos {
+            let url = video["url"].as_str().unwrap_or("").to_string();
+            let topic = video["topic"].as_str().unwrap_or("").to_string();
+            if url.is_empty() || topic.is_empty() { continue; }
+            if existing_urls.contains(&url) {
+                skipped += 1;
+                continue;
+            }
+
+            match brain_cognition::autonomy::youtube_learn_academic(&url, &topic, brain).await {
+                Ok(pairs) => {
+                    total_triples += pairs;
+                    learned += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("Batch learn failed for {url}: {e}");
+                }
+            }
+        }
+
+        let concepts = brain.spiking_brain.as_ref()
+            .map(|sb| sb.lock().unwrap().knowledge.num_concepts())
+            .unwrap_or(0);
+
+        Json(serde_json::json!({
+            "topics_learned": learned,
+            "triples": total_triples,
+            "concepts": concepts,
+            "skipped": skipped,
+        })).into_response()
+    } else {
+        Json(serde_json::json!({"error": "Brain not initialized"})).into_response()
+    }
+}
+
+/// Knowledge graph statistics — topics, concepts, bridges.
+pub async fn api_brain_knowledge_stats(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if let Some(brain) = &state.brain {
+        if let Some(ref sb) = brain.spiking_brain {
+            let sb = sb.lock().unwrap();
+            let topics = sb.knowledge.all_topics();
+            let bridges = sb.knowledge.bridge_concepts();
+            let top_connected = sb.knowledge.top_connected(10);
+
+            let topics_path = brain.config.project_root.join("data/topics.json");
+            let topic_details: Vec<serde_json::Value> = std::fs::read_to_string(&topics_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+
+            return Json(serde_json::json!({
+                "total_topics": topics.len(),
+                "total_associations": sb.knowledge.num_associations(),
+                "total_concepts": sb.knowledge.num_concepts(),
+                "topics": topics,
+                "topic_details": topic_details,
+                "bridge_concepts": bridges.iter().take(10).map(|(name, topics)| {
+                    serde_json::json!({"concept": name, "topics": topics})
+                }).collect::<Vec<_>>(),
+                "top_connected": top_connected.iter().map(|(name, deg)| {
+                    serde_json::json!({"concept": name, "degree": deg})
+                }).collect::<Vec<_>>(),
+            })).into_response();
+        }
+    }
+    Json(serde_json::json!({"error": "Brain not initialized"})).into_response()
 }
