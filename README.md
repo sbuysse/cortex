@@ -116,14 +116,43 @@ A: "TurboQuant optimizes memory usage by employing techniques like
 
 The LLM now answers using knowledge from the video — "kv cache", "short-term memory of models", and "stock price" come from the brain's learned associations, not from the LLM's training data. The spiking brain decides what to recall; the LLM turns it into language.
 
+## Experiment 2: Cross-Domain Emergent Discovery
+
+After teaching Cortex 24 topics (TurboQuant, FlashAttention, transformers, LoRA, GGUF, spiking networks, diffusion models, tokenization, and more), we asked a question that spans multiple domains.
+
+**Query:** "How does TurboQuant work?"
+
+**Brain associations (dual-pathway recall with confidence tags):**
+```
+[explicit] kv cache (strength: 200)           — from BFS
+[explicit] short-term memory of models (160)   — from BFS
+[explicit] formal mathematical proof (160)     — from BFS
+[emergent] sparse (strength: 70)               — discovered by spiking propagation
+[emergent] word into vector (strength: 70)     — discovered by spiking propagation
+[emergent] similar words close to each other (70) — discovered by spiking propagation
+```
+
+The `[emergent]` associations were NOT learned from TurboQuant's video — they were discovered by the 2B-synapse spiking network finding lateral pathways to concepts from other topics (tokenization, embeddings). The spiking brain connected "quantization" to "sparsity" and "vector representations" through neural propagation, not text matching.
+
+### How It Works
+
+1. **BFS recall** (0ms): follows explicit learned edges in the HashMap association graph
+2. **Spiking recall** (0.1s): fires seed concepts into 500K association cortex neurons, propagates through imprinted + random synapses for 30 steps
+3. **Merge**: concepts found by both = `[confirmed]`, BFS only = `[explicit]`, spiking only = `[emergent]`
+4. **Neuromodulator control**: single-topic queries use focused mode (high acetylcholine), multi-topic queries use broad mode (high norepinephrine)
+
 ### Performance
 
 | Metric | Value |
 |--------|-------|
-| Triple extraction | LLM-powered (Ollama), 12 triples from 50 sentences in 9.4s |
-| Learning | Batch: 12 triples in 0.000s (instant) |
-| Recall | BFS chain propagation in 0.000s (instant) |
-| End-to-end (learn + prime + ask) | ~20s |
+| Topics learned | 24 (from YouTube videos) |
+| Concepts | 816 |
+| Associations | 1,195 |
+| Persisted triples | 423 (survives restarts) |
+| Triple extraction | LLM-powered (Ollama), ~12 triples per video in 9.4s |
+| Learning | Batch: 12 triples in 0.000s + 803 synapses imprinted |
+| BFS recall | 0.000s (instant) |
+| Spiking recall | 0.1s (30 steps through association cortex) |
 | Brain scale | 2M neurons, 2B synapses, 10 regions |
 
 ## Installation

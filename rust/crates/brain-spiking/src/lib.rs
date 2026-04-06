@@ -502,6 +502,20 @@ impl SpikingBrain {
             }
         }
 
+        // Filter noise concepts (relation verbs, short generic terms)
+        let noise_concepts = ["is", "are", "was", "were", "relates-to", "has", "have",
+            "uses", "use", "called", "known", "means", "works",
+            "compresses", "reduces", "enables", "provides", "creates",
+            "converts", "stores", "processes", "improves", "requires",
+            "replaces", "achieves", "represents", "contains", "produces",
+            "maintains", "generates", "supports", "implements", "optimizes",
+            "transforms", "currently talking", "numbers relate", "these numbers",
+            "employs", "includes", "affects", "relate to"];
+        activated.retain(|(name, _)| {
+            let lower = name.to_lowercase();
+            !noise_concepts.contains(&lower.as_str()) && lower.len() > 3
+        });
+
         activated.sort_by(|a, b| b.1.cmp(&a.1));
         activated.truncate(10);
 

@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0] - 2026-04-06
+
+### Spiking Recall Resurrection
+- Fire BFS-discovered concepts into the 2B-synapse spiking network
+- 30-step propagation through association cortex with raised synaptic clamp (1.5)
+- Neuromodulator-driven recall: focused mode (high ACh) for single-topic, broad mode (high NE) for cross-domain
+- Emergent associations discovered through lateral neural pathways
+- Example: querying "TurboQuant" activates "sparse", "word into vector" from different topics
+- Confidence tags: [confirmed] (BFS+spiking), [explicit] (BFS only), [emergent] (spiking only)
+
+### Synaptic Knowledge Imprinting
+- When triples are learned, strengthen actual CSR weights between concept assembly neurons
+- 803 synapses imprinted per 13-triple learning batch (delta 0.8/0.8/0.4)
+- Persisted triples re-imprinted on startup
+- Imprinted weights cap at 1.0 (2x the normal 0.5 background)
+
+### Persistent Cumulative Knowledge
+- Triples persist to `data/triples.log` (pipe-delimited, append-only)
+- Topic registry in `data/topics.json` (deduplication, provenance)
+- Knowledge survives server restarts: 24 topics, 816 concepts, 1195 associations
+- Weight cap raised to 2.0 for multi-source reinforcement
+
+### Cross-Domain Reasoning
+- Bidirectional BFS: query matches 2+ concept clusters, BFS from both sides, find bridge nodes
+- Bridge concept detection: "kv cache" shared between TurboQuant and FlashAttention
+- Cross-domain answers: LLM connects knowledge from different YouTube videos
+- Topic provenance tracking on ConceptRegistry
+
+### New API Endpoints
+- `POST /api/brain/learn/batch` — learn multiple videos `{"videos": [{url, topic}, ...]}`
+- `GET /api/brain/knowledge/stats` — topics, concepts, associations, bridges, top connected
+
 ## [0.3.0] - 2026-04-06
 
 ### LLM-Powered Triple Extraction
