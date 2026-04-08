@@ -1079,29 +1079,67 @@ pub async fn api_brain_fetch(State(state): State<Arc<AppState>>, Json(body): Jso
     if url.is_empty() {
         return Json(serde_json::json!({"error": "url required"})).into_response();
     }
-    let client = reqwest::Client::new();
-    match client.get(&url).timeout(std::time::Duration::from_secs(15)).send().await {
-        Ok(resp) => {
-            if let Ok(text) = resp.text().await {
-                let clean: String = text.chars().fold((String::new(), false), |(mut s, in_tag), c| {
-                    if c == '<' { (s, true) }
-                    else if c == '>' { (s, false) }
-                    else if !in_tag { s.push(c); (s, false) }
-                    else { (s, true) }
-                }).0;
-                let snippet = &clean[..clean.len().min(3000)];
-                if let Some(brain) = &state.brain {
-                    let _ = brain.memory_db.store_perception(
-                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),
-                        "text", Some(snippet), None, None, None);
-                }
-                Json(serde_json::json!({"status": "read", "url": url, "text_length": snippet.len()})).into_response()
-            } else {
-                Json(serde_json::json!({"error": "Failed to read response"})).into_response()
+    let client = match reqwest::Client::builder()
+        .user_agent("CortexBrain/1.0 (https://github.com/sbuysse/cortex; learning agent)")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return Json(serde_json::json!({"error": e.to_string()})).into_response(),
+    };
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => return Json(serde_json::json!({"error": e.to_string()})).into_response(),
+    };
+    let status = resp.status().as_u16();
+    let text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => return Json(serde_json::json!({"error": e.to_string()})).into_response(),
+    };
+    // Strip HTML tags + collapse whitespace
+    let clean: String = text.chars().fold((String::new(), false), |(mut s, in_tag), c| {
+        if c == '<' { (s, true) }
+        else if c == '>' { (s, false) }
+        else if !in_tag { s.push(c); (s, false) }
+        else { (s, true) }
+    }).0;
+    let collapsed: String = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    let snippet: String = collapsed.chars().take(4000).collect();
+
+    let mut associations_json = serde_json::Value::Array(vec![]);
+    if let Some(brain) = &state.brain {
+        let _ = brain.memory_db.store_perception(
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),
+            "text", Some(&snippet), None, None, None);
+
+        if let Some(te) = &brain.text_encoder {
+            if let Ok(pairs) = te.semantic_search(&snippet, 8) {
+                associations_json = serde_json::Value::Array(
+                    pairs.iter().map(|(l, s)| serde_json::json!({"label": l, "similarity": s})).collect()
+                );
             }
         }
-        Err(e) => Json(serde_json::json!({"error": e.to_string()})).into_response(),
+
+        if let Some(ref sb) = brain.spiking_brain {
+            if let Ok(mut sb) = sb.try_lock() {
+                sb.novelty(0.6);
+                sb.reward(0.3);
+                sb.network.modulators.arousal(0.4);
+            }
+        }
+
+        brain.sse.emit("text_ingested", serde_json::json!({
+            "source": "url", "url": url, "length": snippet.len(),
+        }));
     }
+
+    Json(serde_json::json!({
+        "status": "read",
+        "url": url,
+        "http_status": status,
+        "text_length": snippet.len(),
+        "associations": associations_json,
+    })).into_response()
 }
 
 // ─── Phase 7: YouTube Learning (native) ─────────────────────────

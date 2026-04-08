@@ -1,6 +1,6 @@
 // ── Cortex — 3D Spiking Brain Visualization ────────────────────────
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js';
+import * as THREE from '/static/vendor/three/three.module.js';
+import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 const BG_COLOR = 0x050510;
@@ -82,6 +82,74 @@ for (const r of REGIONS) {
   scene.add(mesh);
   regionMeshes[r.name] = mesh;
 }
+
+// ── Signal Packets (traveling dots along region-to-region paths) ────
+const packetGroup = new THREE.Group();
+scene.add(packetGroup);
+const packets = []; // {mesh, from, to, start, duration, color}
+const packetGeo = new THREE.SphereGeometry(0.06, 8, 6);
+
+function spawnPacket(fromName, toName, opts = {}) {
+  const a = regionMeshes[fromName];
+  const b = regionMeshes[toName];
+  if (!a || !b) return;
+  const color = opts.color != null ? opts.color : 0x10b981;
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1.0 });
+  const mesh = new THREE.Mesh(packetGeo, mat);
+  mesh.position.copy(a.position);
+  packetGroup.add(mesh);
+  packets.push({
+    mesh,
+    from: a.position.clone(),
+    to: b.position.clone(),
+    start: performance.now() + (opts.delay || 0),
+    duration: opts.duration || 900,
+    color,
+  });
+}
+
+function updatePackets() {
+  const now = performance.now();
+  for (let i = packets.length - 1; i >= 0; i--) {
+    const p = packets[i];
+    if (now < p.start) { p.mesh.visible = false; continue; }
+    p.mesh.visible = true;
+    const t = (now - p.start) / p.duration;
+    if (t >= 1) {
+      packetGroup.remove(p.mesh);
+      p.mesh.material.dispose();
+      packets.splice(i, 1);
+      continue;
+    }
+    // Quadratic arc: lerp + small upward bow
+    const pos = p.from.clone().lerp(p.to, t);
+    const bow = Math.sin(t * Math.PI) * 0.3;
+    pos.y += bow;
+    p.mesh.position.copy(pos);
+    // Fade in/out at edges
+    const alpha = Math.sin(t * Math.PI);
+    p.mesh.material.opacity = alpha;
+    p.mesh.scale.setScalar(0.7 + alpha * 0.8);
+  }
+}
+
+// Pathway definitions for flows
+const THINKING_PATHWAYS = [
+  ['hippocampus', 'association_cortex'],
+  ['association_cortex', 'prefrontal_cortex'],
+  ['prefrontal_cortex', 'association_cortex'],
+  ['association_cortex', 'hippocampus'],
+  ['predictive_cortex', 'prefrontal_cortex'],
+];
+const RECALL_PATHWAYS = [
+  ['hippocampus', 'association_cortex'],
+  ['association_cortex', 'visual_cortex'],
+  ['association_cortex', 'auditory_cortex'],
+  ['association_cortex', 'prefrontal_cortex'],
+  ['prefrontal_cortex', 'motor_cortex'],
+  ['predictive_cortex', 'association_cortex'],
+  ['amygdala', 'prefrontal_cortex'],
+];
 
 // ── Knowledge Nodes ─────────────────────────────────────────────────
 const knowledgeGroup = new THREE.Group();
@@ -202,29 +270,78 @@ async function pollSpiking() {
 
 setInterval(pollSpiking, 3000);
 
-// ── Recall Animation ────────────────────────────────────────────────
+// ── Pulse state (held emissive until expiry, so idleSparkle decay doesn't eat it)
+const regionPulseUntil = {};   // name -> epoch ms
+const regionPulseLevel = {};   // name -> emissive during pulse
+const nodePulseUntil = new Map();   // mesh -> epoch ms
+const nodePulseOrig = new Map();    // mesh -> original scale
+
+function pulseRegion(name, level, durationMs) {
+  const mesh = regionMeshes[name];
+  if (!mesh) return;
+  regionPulseUntil[name] = performance.now() + durationMs;
+  regionPulseLevel[name] = level;
+}
+
+function pulseNode(mesh, durationMs) {
+  if (!mesh) return;
+  if (!nodePulseOrig.has(mesh)) nodePulseOrig.set(mesh, mesh.scale.x);
+  nodePulseUntil.set(mesh, performance.now() + durationMs);
+}
+
+// Sustained "thinking" pulse — called while awaiting LLM
+let thinkingTimer = null;
+function startThinkingPulse() {
+  if (thinkingTimer) return;
+  const pulse = () => {
+    pulseRegion('prefrontal_cortex', 0.9, 500);
+    pulseRegion('association_cortex', 0.9, 500);
+    pulseRegion('hippocampus', 0.7, 500);
+    // Fire a few packets along the thinking loop
+    for (const [a, b] of THINKING_PATHWAYS) {
+      if (Math.random() < 0.55) {
+        spawnPacket(a, b, { color: 0x06b6d4, duration: 850, delay: Math.random() * 200 });
+      }
+    }
+  };
+  pulse();
+  thinkingTimer = setInterval(pulse, 400);
+}
+function stopThinkingPulse() {
+  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+}
+
+// Recall animation — bolder, longer, cascading
 function animateRecall(associations) {
+  stopThinkingPulse();
+  // Cascading wave through recall pathway
+  pulseRegion('hippocampus', 1.2, 2500);
+  setTimeout(() => pulseRegion('association_cortex', 1.3, 2500), 120);
+  setTimeout(() => pulseRegion('prefrontal_cortex', 1.1, 2000), 300);
+  setTimeout(() => pulseRegion('motor_cortex', 0.9, 1500), 500);
+
+  // Flood packets along recall pathways (staggered)
+  RECALL_PATHWAYS.forEach(([a, b], i) => {
+    for (let k = 0; k < 3; k++) {
+      spawnPacket(a, b, {
+        color: 0x10b981,
+        duration: 1100,
+        delay: i * 80 + k * 180,
+      });
+    }
+  });
+
   if (!associations || !associations.length) return;
-
-  // Flash association cortex
-  const assoc = regionMeshes['association_cortex'];
-  if (assoc) {
-    assoc.material.emissiveIntensity = 1.0;
-    setTimeout(() => { assoc.material.emissiveIntensity = 0.15; }, 800);
-  }
-
-  // Pulse matching knowledge nodes
   for (const a of associations) {
     const label = a.label || a.concept || a;
     const node = knowledgeNodes[label];
-    if (!node) continue;
-    const origScale = node.scale.x;
-    node.scale.setScalar(origScale * 3);
-    node.material.emissiveIntensity = 1.0;
-    setTimeout(() => {
-      node.scale.setScalar(origScale);
-      node.material.emissiveIntensity = 0.3;
-    }, 600);
+    if (node) {
+      const orig = nodePulseOrig.get(node) || node.scale.x;
+      nodePulseOrig.set(node, orig);
+      node.scale.setScalar(orig * 3);
+      node.material.emissiveIntensity = 1.0;
+      nodePulseUntil.set(node, performance.now() + 2000);
+    }
   }
 }
 
@@ -249,14 +366,31 @@ const clock = new THREE.Clock();
 
 function idleSparkle() {
   const t = clock.getElapsedTime();
+  const now = performance.now();
   for (const r of REGIONS) {
     const mesh = regionMeshes[r.name];
     if (!mesh) continue;
+    // Active pulse overrides idle
+    const until = regionPulseUntil[r.name] || 0;
+    if (until > now) {
+      const level = regionPulseLevel[r.name] || 0.9;
+      // Breathing: sine over pulse duration
+      mesh.material.emissiveIntensity = level * (0.7 + 0.3 * Math.sin(now * 0.01));
+      continue;
+    }
     const base = mesh.userData.baseEmissive;
-    // Subtle sine modulation per region (different phase)
     const phase = r.pos[0] * 2 + r.pos[1] * 3 + r.pos[2];
     const mod = Math.sin(t * 0.8 + phase) * 0.04;
     mesh.material.emissiveIntensity = Math.max(base, mesh.material.emissiveIntensity * 0.98 + mod * 0.02);
+  }
+  // Node pulse expiry
+  for (const [mesh, until] of nodePulseUntil.entries()) {
+    if (until <= now) {
+      const orig = nodePulseOrig.get(mesh);
+      if (orig != null) mesh.scale.setScalar(orig);
+      mesh.material.emissiveIntensity = 0.3;
+      nodePulseUntil.delete(mesh);
+    }
   }
 }
 
@@ -266,6 +400,7 @@ function animate() {
   controls.update();
   updateLOD();
   idleSparkle();
+  updatePackets();
   renderer.render(scene, camera);
 }
 animate();
@@ -285,3 +420,12 @@ cortexLoadStats();
 window.cortexLoadGraph = cortexLoadGraph;
 window.cortexLoadStats = cortexLoadStats;
 window.animateRecall = animateRecall;
+window.startThinkingPulse = startThinkingPulse;
+window.stopThinkingPulse = stopThinkingPulse;
+window.__cortexDebug = () => {
+  const out = { packets: packets.length };
+  for (const name of Object.keys(regionMeshes)) {
+    out[name] = +regionMeshes[name].material.emissiveIntensity.toFixed(3);
+  }
+  return out;
+};

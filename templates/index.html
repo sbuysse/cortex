@@ -225,43 +225,63 @@
 
     try {
       if (text.startsWith('http://') || text.startsWith('https://')) {
-        // URL -> Learn
-        const topic = window.prompt('Topic name for this URL:', '');
-        if (!topic) { btn.disabled = false; return; }
-        showCard('learning-card', '<div class="spinner"></div> Learning from URL...');
-        const resp = await fetch('/api/brain/learn/academic', {
+        // URL -> Fetch, encode, link associations
+        showCard('learning-card', '<div class="spinner"></div> Fetching ' + escHtml(text) + '…');
+        const resp = await fetch('/api/brain/fetch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: text, topic: topic }),
+          body: JSON.stringify({ url: text }),
         });
         const data = await resp.json();
-        const msg = data.error
-          ? '<span class="text-orange">Error: ' + escHtml(data.error) + '</span>'
-          : '<span class="text-green">Learned ' + (data.concepts_added || 0) + ' concepts</span> from <em>' + escHtml(topic) + '</em>';
-        showCard('learning-card', msg);
+        if (data.error) {
+          showCard('learning-card', '<span class="text-orange">Error: ' + escHtml(data.error) + '</span>');
+        } else {
+          const assocs = data.associations || [];
+          let html = '<span class="text-green">Read ' + (data.text_length || 0) + ' chars</span> from <em>' + escHtml(text) + '</em>';
+          if (assocs.length) {
+            html += '<div class="mt-2 text-dim" style="font-size:11px">Linked to:</div>';
+            html += '<ul class="assoc-list mt-1">';
+            for (const a of assocs.slice(0, 6)) {
+              html += '<li><span class="assoc-label">' + escHtml(a.label) + '</span>';
+              if (a.similarity != null) html += '<span class="assoc-weight">' + Number(a.similarity).toFixed(2) + '</span>';
+              html += '</li>';
+            }
+            html += '</ul>';
+            html += '<div class="mt-2 text-dim" style="font-size:11px">Done — you can ask about it now.</div>';
+            if (window.animateRecall) window.animateRecall(assocs);
+          } else {
+            html += '<div class="mt-2 text-dim" style="font-size:11px">Done — no semantic matches found.</div>';
+          }
+          showCard('learning-card', html);
+        }
         if (window.cortexLoadGraph) window.cortexLoadGraph();
         if (window.cortexLoadStats) window.cortexLoadStats();
       } else if (text.startsWith('/')) {
         handleCommand(text);
       } else {
-        // Ask the brain
-        showCard('response-card', '<div class="spinner"></div> Thinking...');
-
-        // Prime (fire once, ignore result)
-        fetch('/api/brain/dialogue/grounded', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: text }),
-        }).catch(() => {});
-
-        // Wait, then ask for real
-        await new Promise(r => setTimeout(r, 5000));
+        // Ask the brain — single call, may take 10-25s for LLM
+        showCard('response-card', '<div class="spinner"></div> Thinking… (up to 25s)');
+        if (window.startThinkingPulse) window.startThinkingPulse();
         const resp = await fetch('/api/brain/dialogue/grounded', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: text }),
+          body: JSON.stringify({ message: text }),
         });
         const data = await resp.json();
+
+        // Light up knowledge nodes that match any returned semantic/brain associations
+        const pulseLabels = [];
+        if (data.grounding && Array.isArray(data.grounding.semantic_matches)) {
+          for (const l of data.grounding.semantic_matches) pulseLabels.push(l);
+        }
+        if (Array.isArray(data.brain_associations)) {
+          for (const l of data.brain_associations) {
+            if (typeof l === 'string') pulseLabels.push(l.replace(/^\[[^\]]+\]\s*/, ''));
+          }
+        }
+        if (pulseLabels.length && window.animateRecall) {
+          window.animateRecall(pulseLabels.map(l => ({ label: l })));
+        }
 
         let html = '<div class="card-body">';
         html += '<p>' + escHtml(data.response || data.text || 'No response') + '</p>';
@@ -305,6 +325,7 @@
       showCard('response-card', '<span class="text-orange">Error: ' + escHtml(e.message) + '</span>');
     }
 
+    if (window.stopThinkingPulse) window.stopThinkingPulse();
     btn.disabled = false;
   };
 
