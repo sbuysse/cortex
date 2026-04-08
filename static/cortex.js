@@ -66,6 +66,52 @@ scene.add(brainShell);
 // ── Brain Regions ───────────────────────────────────────────────────
 const regionMeshes = {};
 
+function makeLabelSprite(text, color) {
+  const canvas = document.createElement('canvas');
+  const padding = 16;
+  const fontSize = 48;
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+  const metrics = ctx.measureText(text);
+  const textW = metrics.width;
+  // Pill background
+  const bgW = textW + padding * 2;
+  const bgH = fontSize + padding;
+  const x0 = (canvas.width - bgW) / 2;
+  const y0 = (canvas.height - bgH) / 2;
+  const r = bgH / 2;
+  ctx.fillStyle = 'rgba(5, 10, 20, 0.78)';
+  ctx.beginPath();
+  ctx.moveTo(x0 + r, y0);
+  ctx.lineTo(x0 + bgW - r, y0);
+  ctx.arc(x0 + bgW - r, y0 + r, r, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(x0 + r, y0 + bgH);
+  ctx.arc(x0 + r, y0 + r, r, Math.PI / 2, -Math.PI / 2);
+  ctx.closePath();
+  ctx.fill();
+  // Border
+  ctx.strokeStyle = '#' + color.toString(16).padStart(6, '0');
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  // Text
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  tex.anisotropy = 4;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.6, 0.4, 1);
+  sprite.renderOrder = 999;
+  return sprite;
+}
+
+const regionLabels = {};
 for (const r of REGIONS) {
   const geo = new THREE.SphereGeometry(r.size, 24, 18);
   const mat = new THREE.MeshPhongMaterial({
@@ -81,6 +127,11 @@ for (const r of REGIONS) {
   mesh.userData = { name: r.name, baseEmissive: 0.15 };
   scene.add(mesh);
   regionMeshes[r.name] = mesh;
+
+  const label = makeLabelSprite(r.label, r.color);
+  label.position.set(r.pos[0], r.pos[1] + r.size + 0.25, r.pos[2]);
+  scene.add(label);
+  regionLabels[r.name] = label;
 }
 
 // ── Signal Packets (traveling dots along region-to-region paths) ────
