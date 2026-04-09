@@ -1079,6 +1079,47 @@ pub async fn api_brain_fetch(State(state): State<Arc<AppState>>, Json(body): Jso
     if url.is_empty() {
         return Json(serde_json::json!({"error": "url required"})).into_response();
     }
+
+    // Route YouTube URLs through the academic-learner pipeline: yt-dlp pulls
+    // subtitles, we extract real concepts + knowledge triples, store novel
+    // concepts in the text-searchable learned store. This is what the user
+    // expects when they paste a YouTube link.
+    let is_youtube = url.contains("youtube.com/")
+        || url.contains("youtu.be/")
+        || url.contains("m.youtube.com/");
+    if is_youtube {
+        if let Some(brain) = &state.brain {
+            match brain_cognition::autonomy::youtube_learn_academic(&url, "", brain).await {
+                Ok(pairs) => {
+                    // Snapshot the top learned concepts we can show the UI
+                    let top: Vec<serde_json::Value> = {
+                        let learned = brain.learned_concepts.lock().unwrap();
+                        learned.iter().rev().take(8)
+                            .map(|(label, _)| serde_json::json!({"label": label, "similarity": 1.0}))
+                            .collect()
+                    };
+                    brain.sse.emit("text_ingested", serde_json::json!({
+                        "source": "youtube", "url": url, "triples": pairs,
+                    }));
+                    return Json(serde_json::json!({
+                        "status": "learned",
+                        "url": url,
+                        "source": "youtube",
+                        "triples_extracted": pairs,
+                        "associations": top,
+                    })).into_response();
+                }
+                Err(e) => {
+                    return Json(serde_json::json!({
+                        "error": format!("YouTube learn failed: {e}"),
+                        "url": url,
+                    })).into_response();
+                }
+            }
+        }
+    }
+
+    // Non-YouTube: plain HTTP fetch + HTML strip
     let client = match reqwest::Client::builder()
         .user_agent("CortexBrain/1.0 (https://github.com/sbuysse/cortex; learning agent)")
         .timeout(std::time::Duration::from_secs(20))
@@ -1112,19 +1153,44 @@ pub async fn api_brain_fetch(State(state): State<Arc<AppState>>, Json(body): Jso
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),
             "text", Some(&snippet), None, None, None);
 
+        // Semantic match against AudioSet labels — but ONLY keep results
+        // above a meaningful similarity threshold. Anything lower is
+        // nearest-neighbor noise (sound labels) and should not be shown.
+        const ASSOC_THRESHOLD: f32 = 0.30;
         if let Some(te) = &brain.text_encoder {
             if let Ok(pairs) = te.semantic_search(&snippet, 8) {
-                associations_json = serde_json::Value::Array(
-                    pairs.iter().map(|(l, s)| serde_json::json!({"label": l, "similarity": s})).collect()
-                );
+                let kept: Vec<serde_json::Value> = pairs.iter()
+                    .filter(|(_, s)| *s >= ASSOC_THRESHOLD)
+                    .map(|(l, s)| serde_json::json!({"label": l, "similarity": s}))
+                    .collect();
+                associations_json = serde_json::Value::Array(kept);
             }
         }
 
-        if let Some(ref sb) = brain.spiking_brain {
-            if let Ok(mut sb) = sb.try_lock() {
-                sb.novelty(0.6);
-                sb.reward(0.3);
-                sb.network.modulators.arousal(0.4);
+        // Extract novel concepts from the page text and persist them to the
+        // text-searchable learned_concepts store (same store used by the
+        // academic pipeline). This makes them available to dialogue grounding.
+        if let Some(te) = &brain.text_encoder {
+            let sentences: Vec<&str> = snippet.split(|c: char| c == '.' || c == '!' || c == '?')
+                .map(|s| s.trim())
+                .filter(|s| s.len() > 30 && s.len() < 300
+                    && s.split_whitespace().filter(|w| w.len() > 4).count() >= 3)
+                .take(30)
+                .collect();
+            let mut added = 0usize;
+            {
+                let mut learned = brain.learned_concepts.lock().unwrap();
+                for s in &sentences {
+                    let label: String = s.split_whitespace().take(15).collect::<Vec<_>>().join(" ");
+                    if label.len() < 12 { continue; }
+                    if let Ok(emb) = te.encode(&label) {
+                        learned.push((label, emb));
+                        added += 1;
+                    }
+                }
+            }
+            if added > 0 {
+                tracing::info!("api_brain_fetch: added {added} novel concepts from {url}");
             }
         }
 
@@ -2008,8 +2074,30 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     let wm_focus: Vec<String> = brain.working_memory.lock().unwrap()
         .get_state().items.iter().take(3).map(|i| i.label.clone()).collect();
 
+    // Search the learned_concepts store (text content from fetched URLs
+    // and academic-learned videos). Returns raw sentence snippets ranked
+    // by cosine similarity to the query embedding.
+    let learned_hits: Vec<(String, f32)> = if let Some(te) = &brain.text_encoder {
+        if let Ok(q) = te.encode(&message) {
+            let qn: f32 = q.iter().map(|x| x*x).sum::<f32>().sqrt().max(1e-9);
+            let learned = brain.learned_concepts.lock().unwrap();
+            let mut scored: Vec<(String, f32)> = learned.iter().filter_map(|(label, emb)| {
+                if emb.len() != q.len() { return None; }
+                let dot: f32 = q.iter().zip(emb.iter()).map(|(a, b)| a*b).sum();
+                let en: f32 = emb.iter().map(|x| x*x).sum::<f32>().sqrt().max(1e-9);
+                Some((label.clone(), dot / (qn * en)))
+            }).collect();
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            scored.into_iter().filter(|(_, s)| *s >= 0.45).take(5).collect()
+        } else { vec![] }
+    } else { vec![] };
+
     let (related, fm_matches, kg_facts) = if let Some(te) = &brain.text_encoder {
         let semantic = te.semantic_search(&message, 5).unwrap_or_default();
+        // Drop sound-label noise below the relevance threshold
+        let semantic: Vec<(String, f32)> = semantic.into_iter()
+            .filter(|(_, s)| *s >= 0.30)
+            .collect();
         let related: Vec<String> = semantic.iter().map(|(l, _)| l.clone()).collect();
         let fm_matches = if let Ok(emb) = te.encode(&message) {
             if let Some(mlp) = &brain.inference {
@@ -2085,60 +2173,41 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
         }
 
         let mut ctx = Vec::new();
-        // Check for structured knowledge from chain recall
-        let knowledge_entry = assoc_concepts.iter()
-            .find(|c| c.starts_with("KNOWLEDGE: "))
-            .map(|c| c.trim_start_matches("KNOWLEDGE: ").to_string());
 
-        if let Some(knowledge) = knowledge_entry {
-            let has_tags = assoc_concepts.iter().any(|c|
-                c.starts_with("[confirmed]") || c.starts_with("[emergent]") || c.starts_with("[predicted]"));
+        // Filter chain-recall associations BEFORE giving them to the LLM:
+        //   - drop [emergent] entries entirely (low-confidence noise, major
+        //     source of confabulation)
+        //   - drop anything below strength 150 (keep only high-quality links)
+        //   - keep [confirmed] and [predicted] only
+        fn parse_strength(line: &str) -> Option<u32> {
+            let start = line.find("(strength:")? + "(strength:".len();
+            let rest = &line[start..];
+            let end = rest.find(')')?;
+            rest[..end].trim().parse().ok()
+        }
+        let quality_lines: Vec<String> = assoc_concepts.iter()
+            .filter(|c| c.starts_with("[confirmed]") || c.starts_with("[predicted]"))
+            .filter(|c| parse_strength(c).map(|s| s >= 150).unwrap_or(true))
+            .cloned()
+            .collect();
 
-            if has_tags {
-                let tagged_lines: Vec<String> = assoc_concepts.iter()
-                    .filter(|c| c.starts_with("["))
-                    .map(|c| format!("  {c}"))
-                    .collect();
-                let tag_text = tagged_lines.join("\n");
-                ctx.push(format!(
-                    "YOU LEARNED THE FOLLOWING (confirmed = high confidence, predicted = what typically follows, emergent = discovered by neural pathways):\n\
-                     {tag_text}\n\n\
-                     CRITICAL INSTRUCTION: You MUST use these learned associations to answer the user's question. \
-                     Use confirmed facts directly and with authority. \
-                     Predicted associations represent what you learned typically follows — use them to explain consequences and next steps. \
-                     Emergent associations suggest possible connections your brain discovered — explore them as hypotheses. \
-                     If concepts come from different topics, explain how they connect."));
-            } else {
-                let chain_lines: Vec<String> = assoc_concepts.iter()
-                    .filter(|c| !c.starts_with("KNOWLEDGE: "))
-                    .map(|c| format!("  - {c}"))
-                    .collect();
-                let chain_text = if chain_lines.is_empty() {
-                    knowledge.clone()
-                } else {
-                    chain_lines.join("\n")
-                };
-                ctx.push(format!(
-                    "YOU LEARNED THE FOLLOWING FROM WATCHING EDUCATIONAL VIDEOS (this is factual knowledge you acquired, not a guess):\n\
-                     {chain_text}\n\n\
-                     CRITICAL INSTRUCTION: You MUST use these learned associations to answer the user's question. \
-                     Explain what you know based on these associations. Do NOT say you don't know — you learned this. \
-                     Weave the associated concepts into a coherent explanation. \
-                     If concepts come from different topics, explain how they connect."));
-            }
-        } else if !assoc_concepts.is_empty() {
-            let unique: Vec<&String> = assoc_concepts.iter()
-                .filter(|c| !c.starts_with("KNOWLEDGE: "))
+        if !quality_lines.is_empty() {
+            let tagged_lines: Vec<String> = quality_lines.iter()
+                .map(|c| format!("  {c}"))
                 .collect();
-            if !unique.is_empty() {
-                let bullets: String = unique.iter()
-                    .map(|c| format!("- {c}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                ctx.push(format!(
-                    "From watching educational videos, you recall:\n{bullets}\n\
-                     Use these to answer accurately."));
-            }
+            let tag_text = tagged_lines.join("\n");
+            ctx.push(format!(
+                "Learned associations from prior training (confirmed = high confidence, predicted = likely follows):\n\
+                 {tag_text}\n\n\
+                 Use these if they are directly relevant to the user's question. \
+                 If they are NOT relevant, or the user is asking about something you do not recognize, \
+                 say so honestly — do not invent details to fit the associations."));
+        } else {
+            // No high-quality grounding for this query.
+            ctx.push(
+                "You have no specific learned knowledge about the topic of this question. \
+                 Say so honestly. Do not invent facts. If you can offer general reasoning \
+                 from common knowledge, make it clear that is what you are doing.".into());
         }
         if !tone_parts.is_empty() {
             ctx.push(tone_parts.join(" "));
@@ -2166,6 +2235,15 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     }
     if !kg_facts.is_empty() {
         brain_ctx_parts.push(format!("knows that {}", kg_facts[0]));
+    }
+    // Learned content from fetched URLs / academic videos — highest-quality grounding
+    if !learned_hits.is_empty() {
+        let bullets: String = learned_hits.iter()
+            .map(|(s, sim)| format!("  - {s} (relevance {:.2})", sim))
+            .collect::<Vec<_>>()
+            .join("\n");
+        brain_ctx_parts.push(format!(
+            "Learned from pages/videos the user has shown you (use these directly to answer):\n{bullets}"));
     }
     if let Some(ref sc) = spiking_ctx {
         brain_ctx_parts.push(sc.clone());
@@ -2237,11 +2315,10 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     // Store Cortex response
     brain_cognition::personal::store_conversation(&mut brain.personal_memory.lock().unwrap(), "cortex", &response, Some(detected_emotion));
 
-    // Reward the spiking brain for successful interaction
-    if let Some(ref sb) = brain.spiking_brain {
-        let mut sb = sb.lock().unwrap();
-        sb.reward(0.3); // mild positive reward for each completed dialogue turn
-    }
+    // NOTE: removed unconditional sb.reward(0.3) per-turn. It was another
+    // feedback pump — rewarding on every dialogue turn reinforced STDP along
+    // whatever pathway the query walked, which was corrupting associations
+    // for repeated queries on unknown topics.
 
     let facts_extracted: Vec<String> = facts.iter()
         .map(|f| format!("{} {} {}", f.subject, f.relation, f.object)).collect();
@@ -2254,6 +2331,7 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
             "fast_memory": fm_matches,
             "knowledge": kg_facts,
             "personal": personal_ctx,
+            "learned": learned_hits.iter().map(|(s, sim)| serde_json::json!({"text": s, "similarity": sim})).collect::<Vec<_>>(),
         },
         "facts_extracted": facts_extracted,
         "grounded": true,
