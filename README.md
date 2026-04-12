@@ -92,43 +92,83 @@ Query → Fuzzy concept matching → Find matching cell assemblies
 
 ## Experiment: Learning TurboQuant from a YouTube Video
 
-To validate the architecture, we taught Cortex about [TurboQuant](https://arxiv.org/abs/2504.19874) — a quantization method published after the LLM's training cutoff. The LLM alone cannot answer questions about it.
+To validate the architecture, we taught Cortex about [TurboQuant](https://arxiv.org/abs/2504.19874) — a quantization method published after the LLM's training cutoff. The video title is clickbait ("Google's New AI Just Broke My Brain") and never mentions "TurboQuant" — the LLM alone cannot answer questions about it.
 
 **Step 1: Ask the raw LLM (no Cortex)**
 ```
-Q: "How does TurboQuant reduce memory usage?"
-A: "I don't have specific information about TurboQuant..."
+Q: "tell me about TurboQuant"
+A: "I don't have specific learned knowledge about TurboQuant..."
 ```
 
-**Step 2: Teach Cortex by watching a YouTube video**
-```bash
-curl -X POST /api/brain/learn/academic \
-  -d '{"query": "https://www.youtube.com/watch?v=7YVrb3-ABYE", "topic": "TurboQuant"}'
-# → 50 sentences processed, 12 triples extracted via LLM, learned in 0ms
+**Step 2: Paste the YouTube URL in the Cortex UI**
 ```
+Input: https://www.youtube.com/watch?v=7YVrb3-ABYE
 
-The LLM extracts precise triples like `TurboQuant|compresses|KV cache` and `TurboQuant|reduces|short-term memory of models` from the transcript. All 12 triples are batch-learned in a single tick (~0ms). Total learning time: ~10 seconds.
+→ LLM identifies topic from transcript: "turbo quant"
+→ 53 triples extracted (turbo quant|compresses|kv cache, turbo quant|uses|random rotations, ...)
+→ Triples stored in spiking brain (synaptic imprinting) + knowledge graph (SQLite)
+→ Concepts seeded: turbo quant, lora, kv cache, random rotations, memory usage, ...
+```
 
 **Step 3: Ask Cortex**
 ```
-Q: "How does TurboQuant reduce memory usage?"
+Q: "tell me about TurboQuant"
 
-Brain associations (from chain recall, strength scores):
-  - kv cache (80)
-  - short-term memory of models (80)
-  - short-term memory of an ai assistant (80)
-  - stock price (80)
-  - moves (80)
+Grounding (learned concepts matched):
+  - turboquant (0.58)
+  - random rotations (0.48)
+  - chopping off end of numbers (0.45)
 
-A: "TurboQuant optimizes memory usage by employing techniques like
-    kv cache management and efficient short-term memory handling of
-    AI models, which allows it to operate more effectively without
-    overloading its resources. This means it can process information
-    and make predictions about stock prices or other data-intensive
-    tasks with reduced memory overhead."
+KG edges retrieved:
+  - turbo quant → compresses → kv cache
+  - turbo quant → uses → random rotations
+  - turbo quant → affects → memory usage
+
+A: "TurboQuant is a system that impacts large semiconductor companies'
+    stock prices by efficiently compressing kv cache and reducing memory
+    usage through the use of random rotations. It's particularly relevant
+    in the context of large language models where it helps optimize
+    performance, though its implementation has also been subject to
+    controversy."
 ```
 
-The LLM now answers using knowledge from the video — "kv cache", "short-term memory of models", and "stock price" come from the brain's learned associations, not from the LLM's training data. The spiking brain decides what to recall; the LLM turns it into language.
+Every fact in the response — KV cache compression, random rotations, memory reduction, controversy — comes from the video transcript, not the LLM's training data.
+
+## Experiment 1b: Learning LoRA from a YouTube Video
+
+Same pipeline, different topic. Fresh server restart, no prior knowledge of this video.
+
+**Before learning:**
+```
+Q: "what is LoRA?"
+A: "I don't have learned knowledge specifically about LoRA..."
+   (learned concepts: [])
+```
+
+**Paste URL:** `https://www.youtube.com/watch?v=PXWYUTMt-AU`
+```
+→ Topic: "lora" (extracted from transcript by LLM)
+→ 60 triples extracted
+→ Concepts: lora, low-rank adaptation, base model weights, parameter numbers, ...
+```
+
+**After learning:**
+```
+Q: "what is LoRA?"
+
+Grounding:
+  - lora (0.60)
+  - LoRA: Low-Rank Adaptation of Large Language Models (0.40)
+  - low-rank adaptation (0.39)
+  - low-rank decomposition (0.38)
+  - read-only to base model weights (0.36)
+
+A: "LoRA stands for Low-Rank Adaptation, a method used in machine
+    learning to efficiently adapt large models to new tasks without
+    the need for full retraining. It achieves this by updating only a
+    small subset of parameters using low-rank matrices, which helps in
+    reducing both computational expense and storage requirements."
+```
 
 ## Experiment 2: Cross-Domain Emergent Discovery
 
