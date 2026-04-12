@@ -389,7 +389,14 @@ async fn youtube_learn_category(category: &str, brain: &BrainState) -> Result<us
 /// Learn from an academic/educational YouTube video.
 /// Pipeline: download subtitles → extract concepts via Ollama → encode via MiniLM →
 /// feed spiking brain + store in knowledge graph. Also encodes audio → auditory cortex.
-pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &BrainState) -> Result<usize, String> {
+pub struct AcademicLearnResult {
+    pub triples_count: usize,
+    pub topic: String,
+    pub key_concepts: Vec<String>,
+}
+
+pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain_arc: std::sync::Arc<BrainState>) -> Result<AcademicLearnResult, String> {
+    let brain: &BrainState = &brain_arc;
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
     let tmp_dir = format!("/tmp/brain_academic_{ts}");
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
@@ -426,19 +433,49 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
             .join(" ")
             .to_lowercase()
     } else {
-        // Fallback: get video title
-        let title_out = tokio::process::Command::new("yt-dlp")
-            .args(["--print", "title", "--no-download", &url])
-            .output().await.ok();
-        let title = title_out
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-        title.split_whitespace()
-            .filter(|w| w.len() > 3)
-            .take(3)
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_lowercase()
+        String::new() // resolved below from video title
+    };
+    // Always fetch the video title (used for topic + as a stored concept)
+    let title_out = tokio::process::Command::new("yt-dlp")
+        .args(["--print", "title", "--no-download", &url])
+        .output().await.ok();
+    let video_title: String = title_out
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let mut topic_key: String = if !topic_key.is_empty() {
+        topic_key
+    } else {
+        // Prefer parenthesized tokens (e.g. "(TurboQuant)" → "turboquant"),
+        // otherwise the first capitalized non-generic ≥4-char token.
+        let generic = ["google", "youtube", "video", "watch", "explained",
+            "tutorial", "introduction", "guide", "basics", "review",
+            "googles"];
+        let strip = |w: &str| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+        let parens: Option<String> = video_title.split(|c: char| c == '(' || c == ')')
+            .skip(1)
+            .step_by(2) // odd indices = inside parens
+            .find_map(|s| {
+                let t = s.trim();
+                if t.len() >= 3 && t.chars().any(|c| c.is_alphabetic()) {
+                    Some(t.to_lowercase())
+                } else { None }
+            });
+        if let Some(p) = parens {
+            p
+        } else {
+            video_title.split_whitespace()
+                .map(strip)
+                .filter(|w| {
+                    let lc = w.to_lowercase();
+                    w.len() >= 4
+                        && w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                        && !generic.contains(&lc.as_str())
+                })
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        }
     };
     tracing::info!("Academic learn: {query} → {url} (topic: {topic_key})");
 
@@ -556,59 +593,108 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
 
     tracing::info!("Academic learn: {} sentences from transcript", sentences.len());
 
-    // Encode each sentence, find nearest codebook concepts
-    let mut concept_scores: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
-    let cb_guard = brain.codebook.lock().unwrap();
-    let cb = cb_guard.as_ref().ok_or("No codebook")?;
-
-    for sentence in sentences.iter().take(50) { // cap at 50 sentences
-        if let Ok(emb) = te.encode(sentence) {
-            let proj = mlp.project_visual(&emb);
-            let nearest = cb.nearest(&proj, 3);
-            for (label, sim) in &nearest {
-                if *sim > 0.3 { // only meaningful matches
-                    *concept_scores.entry(label.clone()).or_insert(0.0) += sim;
+    // Extract the actual topic from the transcript via a tiny LLM call.
+    // Title-based heuristics fail on clickbait titles ("Google's New AI Just
+    // Broke My Brain") that never name the real subject (TurboQuant). The
+    // first chunk of transcript almost always introduces it. Override the
+    // earlier title-derived guess unless the user passed an explicit topic.
+    if topic_override.is_empty() {
+        // Use the RAW transcript (not filtered sentences) so we capture
+        // the intro where the subject is typically named.
+        let sample: String = transcript.chars().take(2500).collect();
+        if !sample.is_empty() {
+            let ollama_url = if brain.config.ollama_url.contains("/api/") {
+                brain.config.ollama_url.clone()
+            } else {
+                format!("{}/api/generate", brain.config.ollama_url)
+            };
+            let topic_prompt = format!(
+                "What is the specific technical subject or method being explained in \
+                 this video? Output ONLY its name (1-3 words). Prefer the proper name \
+                 of the algorithm, technique, paper, or product over generic descriptions.\n\n\
+                 Title: {title}\n\n\
+                 Transcript excerpt:\n{sample}\n\n\
+                 Subject name:",
+                title = video_title,
+                sample = sample,
+            );
+            let body = serde_json::json!({
+                "model": &brain.config.ollama_model,
+                "prompt": topic_prompt,
+                "stream": false,
+                "options": {"temperature": 0.0, "num_predict": 20},
+            });
+            let client = reqwest::Client::new();
+            if let Ok(resp) = client.post(&ollama_url).json(&body)
+                .timeout(std::time::Duration::from_secs(20))
+                .send().await
+            {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    let raw = json["response"].as_str().unwrap_or("").trim();
+                    // Take just the first line, strip surrounding punctuation/quotes,
+                    // collapse to lowercase. Reject empty or absurdly long output.
+                    let line = raw.lines().next().unwrap_or("").trim()
+                        .trim_matches(|c: char| c == '"' || c == '\'' || c == '.' || c == ',' || c == ':');
+                    let cleaned = line.to_lowercase();
+                    let word_count = cleaned.split_whitespace().count();
+                    if !cleaned.is_empty()
+                        && cleaned.len() <= 60
+                        && word_count >= 1 && word_count <= 5
+                        && cleaned.chars().any(|c| c.is_alphabetic())
+                    {
+                        tracing::info!("Academic learn: LLM topic = '{cleaned}' (was '{topic_key}')");
+                        topic_key = cleaned;
+                    }
                 }
             }
         }
     }
 
-    // Sort by accumulated score, take top 10
-    let mut scored: Vec<(String, f32)> = concept_scores.into_iter().collect();
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let concepts: Vec<String> = scored.into_iter().take(10).map(|(label, _)| label).collect();
+    // Encode each sentence, find nearest codebook concepts.
+    // Wrapped in a tight scope so the MutexGuard cannot be inferred to live
+    // across any later .await — the handler future must be Send.
+    let (concepts, novel_concepts): (Vec<String>, Vec<(String, Vec<f32>)>) = {
+        let cb_guard = brain.codebook.lock().unwrap();
+        let cb = cb_guard.as_ref().ok_or("No codebook")?;
 
-    // Also extract novel concepts: sentences that DON'T match the codebook well
-    let mut novel_concepts = Vec::new();
-    for sentence in sentences.iter().take(50) {
-        if let Ok(emb) = te.encode(sentence) {
-            let proj = mlp.project_visual(&emb);
-            let nearest = cb.nearest(&proj, 1);
-            if nearest.is_empty() || nearest[0].1 < 0.4 {
-                // This sentence is about something the codebook doesn't know
-                // Use the first few words as a concept label
-                let label: String = sentence.split_whitespace().take(15).collect::<Vec<_>>().join(" ");
-                if label.len() > 10 {
-                    novel_concepts.push((label, proj));
+        let mut concept_scores: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+        for sentence in sentences.iter().take(50) {
+            if let Ok(emb) = te.encode(sentence) {
+                let proj = mlp.project_visual(&emb);
+                let nearest = cb.nearest(&proj, 3);
+                for (label, sim) in &nearest {
+                    if *sim > 0.3 {
+                        *concept_scores.entry(label.clone()).or_insert(0.0) += sim;
+                    }
                 }
             }
         }
-    }
+        let mut scored: Vec<(String, f32)> = concept_scores.into_iter().collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let concepts: Vec<String> = scored.into_iter().take(10).map(|(label, _)| label).collect();
 
-    drop(cb_guard); // release lock before mutating
-
-    // Add novel concepts to learned_concepts store (text-searchable)
-    if !novel_concepts.is_empty() {
-        let mut learned = brain.learned_concepts.lock().unwrap();
-        for (label, _proj) in &novel_concepts {
-            // Encode via MiniLM for text-based semantic search
-            if let Ok(emb) = te.encode(label) {
-                learned.push((label.clone(), emb));
+        let mut novel_concepts: Vec<(String, Vec<f32>)> = Vec::new();
+        for sentence in sentences.iter().take(50) {
+            if let Ok(emb) = te.encode(sentence) {
+                let proj = mlp.project_visual(&emb);
+                let nearest = cb.nearest(&proj, 1);
+                if nearest.is_empty() || nearest[0].1 < 0.4 {
+                    let label: String = sentence.split_whitespace().take(15).collect::<Vec<_>>().join(" ");
+                    if label.len() > 10 {
+                        novel_concepts.push((label, proj));
+                    }
+                }
             }
         }
-        tracing::info!("Academic learn: added {} novel concepts to learned store (total: {})",
-            novel_concepts.len(), learned.len());
-    }
+        (concepts, novel_concepts)
+    };
+
+    // NOTE: previously this block dumped raw sentence prefixes ("first 15 words")
+    // into learned_concepts as a "novel concepts" fallback. That produced
+    // garbage labels in the UI ("You basically lose everything except…") and
+    // polluted dialogue grounding. Real concepts now come from the LLM triple
+    // extractor below — its subjects/objects are pushed into learned_concepts
+    // once extraction finishes.
 
     let all_concepts: Vec<String> = concepts.iter()
         .chain(novel_concepts.iter().map(|(l, _)| l))
@@ -624,19 +710,45 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
         all_concepts.len(), &all_concepts[..all_concepts.len().min(5)]);
 
     // 5. Extract knowledge triples using LLM (high quality).
-    // Spawn a background task so the main function can return immediately.
+    // Awaited inline via a spawned task so the !Send awaits live in their own
+    // future. The handler future stays Send because the JoinHandle is Send.
     let ollama_url = if brain.config.ollama_url.contains("/api/") {
         brain.config.ollama_url.clone()
     } else {
         format!("{}/api/generate", brain.config.ollama_url)
     };
     let ollama_model = brain.config.ollama_model.clone();
-    let triple_queue = brain.triple_queue.clone();
     let topic_key_owned = topic_key.clone();
+    let video_title_owned = video_title.clone();
     let owned_sentences: Vec<String> = sentences.iter().take(50).map(|s| s.to_string()).collect();
     let sentence_count = owned_sentences.len();
+    let brain_for_llm = brain_arc.clone();
 
-    tokio::spawn(async move {
+    // Seed learned_concepts with the topic + video title up-front so a search
+    // for the central entity (e.g. "TurboQuant") always finds *something*,
+    // even if the LLM-extracted triples miss it.
+    if let Some(te) = brain.text_encoder.as_ref() {
+        let mut learned = brain.learned_concepts.lock().unwrap();
+        let mut seed = |label: &str| {
+            if label.len() >= 3 {
+                if let Ok(emb) = te.encode(label) {
+                    learned.push((label.to_string(), emb));
+                }
+            }
+        };
+        if !topic_key.is_empty() {
+            seed(&topic_key);
+            // Also seed without spaces ("turbo quant" → "turboquant") so
+            // queries like "TurboQuant" hit even if user doesn't use spaces.
+            let no_spaces: String = topic_key.split_whitespace().collect();
+            if no_spaces != topic_key && no_spaces.len() >= 3 { seed(&no_spaces); }
+        }
+        if !video_title.is_empty() { seed(&video_title); }
+    }
+
+    let _llm_result: (usize, Vec<String>, Vec<brain_spiking::Triple>) = tokio::spawn(async move {
+        let brain = &*brain_for_llm;
+        let te = match brain.text_encoder.as_ref() { Some(t) => t, None => return (0usize, vec![], vec![]) };
         let t0 = std::time::Instant::now();
         let mut all_triples: Vec<brain_spiking::Triple> = Vec::new();
 
@@ -648,13 +760,24 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
                 .join("\n");
 
             let prompt = format!(
-                "From these sentences about \"{topic}\", extract factual claims as subject|verb|object triples.\n\
-                 Example: {topic}|compresses|KV cache\n\
-                 Example: {topic}|reduces|memory usage by 4x\n\
-                 Example: quantization|converts|floating point to integer\n\n\
-                 Output ONLY triples, one per line. No explanations.\n\n\
+                "You are extracting knowledge from a video titled: \"{title}\"\n\
+                 The main topic is: {topic}\n\n\
+                 Extract factual triples as subject|relation|object.\n\
+                 STRICT RULES:\n\
+                 - Whenever the sentence is about the main topic, USE \"{topic}\" as the subject.\n\
+                 - subject and object must be NAMED ENTITIES or technical terms\n\
+                 - NEVER use pronouns (it, you, we, this, that, they) — resolve them to entities\n\
+                 - NEVER use sentence fragments or incomplete clauses\n\
+                 - Reject vague filler like 'sometimes', 'somewhere'\n\
+                 - relation must be a short verb phrase (2-4 words)\n\
+                 - If a sentence has no clear claim about a real entity, SKIP it\n\
+                 Examples:\n\
+                 {topic}|compresses|KV cache\n\
+                 {topic}|reduces|memory usage\n\
+                 {topic}|uses|random rotations\n\n\
+                 Output ONLY clean triples, one per line. No commentary.\n\n\
                  {numbered}\n",
-                topic = topic_key_owned, numbered = numbered
+                title = video_title_owned, topic = topic_key_owned, numbered = numbered
             );
 
             let client = reqwest::Client::new();
@@ -696,30 +819,79 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
             }
         }
 
-        // Filter noise and deduplicate
+        // Filter noise and deduplicate.
+        // Reject sentence fragments, pronoun-only entities, leading-stopword
+        // labels, and anything ending with a comma/incomplete punctuation.
+        let stop_starts = [
+            "the ", "a ", "an ", "this ", "that ", "these ", "those ",
+            "it ", "you ", "we ", "they ", "he ", "she ", "his ", "her ",
+            "their ", "our ", "my ", "your ", "and ", "but ", "or ",
+            "if ", "when ", "while ", "before ", "after ", "because ",
+            "so ", "to ", "of ", "for ", "in ", "on ", "with ", "by ",
+            "is ", "was ", "are ", "were ", "be ", "been ",
+        ];
+        let pronouns = ["it", "you", "we", "they", "he", "she", "i", "us", "them", "this", "that"];
+        let filler = ["sometimes", "somewhere", "somehow", "anything", "everything",
+            "something", "nothing", "anywhere", "everywhere", "whatever"];
+        let is_clean = |label: &str| -> bool {
+            let l = label.trim().to_lowercase();
+            if l.len() < 3 || l.len() > 60 { return false; }
+            // No trailing punctuation that signals a fragment
+            if l.ends_with(',') || l.ends_with(';') || l.ends_with(':') { return false; }
+            // No pronoun-only or filler-only labels
+            if pronouns.contains(&l.as_str()) || filler.contains(&l.as_str()) { return false; }
+            // No leading stopword on multi-word labels
+            if l.contains(' ') && stop_starts.iter().any(|s| l.starts_with(s)) { return false; }
+            // Must contain at least one alphabetic char
+            if !l.chars().any(|c| c.is_alphabetic()) { return false; }
+            // Reject "to <verb>" infinitive starts
+            if l.starts_with("to ") { return false; }
+            true
+        };
         all_triples.retain(|t| {
-            // Reject if any field contains prompt echoes
             let fields = [&t.subject, &t.relation, &t.object];
             let noise = ["example", "triple", "sentence", "output", "extract",
                 "rule", "fact", "claim", "given", "according"];
-            !fields.iter().any(|f| noise.iter().any(|n| f.contains(n)))
-                && t.object.len() > 2
-                && t.subject.len() > 2
-                && t.object.split_whitespace().count() <= 8 // reject long rambling objects
+            if fields.iter().any(|f| noise.iter().any(|n| f.contains(n))) { return false; }
+            if !is_clean(&t.subject) || !is_clean(&t.object) { return false; }
+            if t.relation.len() < 2 || t.relation.len() > 30 { return false; }
+            if t.object.split_whitespace().count() > 6 { return false; }
+            if t.subject.split_whitespace().count() > 5 { return false; }
+            true
         });
         let mut seen = std::collections::HashSet::new();
         all_triples.retain(|t| seen.insert(format!("{}|{}|{}", t.subject, t.relation, t.object)));
 
         let count = all_triples.len();
+        let mut seen_concepts: std::collections::HashSet<String> = std::collections::HashSet::new();
         if count > 0 {
-            let mut queue = triple_queue.lock().unwrap();
-            for (idx, triple) in all_triples.into_iter().enumerate() {
-                queue.push((triple, topic_key_owned.clone(), idx as i32));
+            {
+                let mut queue = brain.triple_queue.lock().unwrap();
+                for (idx, triple) in all_triples.iter().enumerate() {
+                    queue.push((triple.clone(), topic_key_owned.clone(), idx as i32));
+                }
+                tracing::info!("LLM extracted {} triples from {} sentences in {:.1}s (queue size: {})",
+                    count, sentence_count, t0.elapsed().as_secs_f32(), queue.len());
             }
-            tracing::info!("LLM extracted {} triples from {} sentences in {:.1}s (queue size: {})",
-                count, sentence_count, t0.elapsed().as_secs_f32(), queue.len());
+            let mut learned = brain.learned_concepts.lock().unwrap();
+            for t in &all_triples {
+                for label in [&t.subject, &t.object] {
+                    if label.len() < 3 || !seen_concepts.insert(label.clone()) { continue; }
+                    if let Ok(emb) = te.encode(label) {
+                        learned.push((label.clone(), emb));
+                    }
+                }
+            }
         }
-    });
+        (count, seen_concepts.into_iter().collect::<Vec<String>>(), all_triples)
+    }).await.unwrap_or((0, vec![], vec![]));
+    let (llm_triples_count, llm_concepts, llm_triples) = _llm_result;
+
+    // Store LLM-extracted triples in the SQLite KG so dialogue grounding
+    // can query them by subject/object (e.g. "turboquant -> reduces -> memory usage").
+    for t in &llm_triples {
+        let _ = brain.memory_db.upsert_edge(&t.subject, &t.relation, &t.object, 0.8);
+    }
 
     let novel_labels: std::collections::HashSet<String> = novel_concepts.iter()
         .map(|(l, _)| l.clone())
@@ -808,7 +980,11 @@ pub async fn youtube_learn_academic(query: &str, topic_override: &str, brain: &B
     let _ = std::fs::create_dir_all(brain.config.project_root.join("data"));
     let _ = std::fs::write(&topics_path, serde_json::to_string_pretty(&topic_list).unwrap_or_default());
 
-    Ok(pairs_generated)
+    Ok(AcademicLearnResult {
+        triples_count: pairs_generated,
+        topic: topic_key.clone(),
+        key_concepts: llm_concepts,
+    })
 }
 
 /// Enrich knowledge graph from ConceptNet API.

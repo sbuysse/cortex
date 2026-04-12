@@ -1089,23 +1089,21 @@ pub async fn api_brain_fetch(State(state): State<Arc<AppState>>, Json(body): Jso
         || url.contains("m.youtube.com/");
     if is_youtube {
         if let Some(brain) = &state.brain {
-            match brain_cognition::autonomy::youtube_learn_academic(&url, "", brain).await {
-                Ok(pairs) => {
-                    // Snapshot the top learned concepts we can show the UI
-                    let top: Vec<serde_json::Value> = {
-                        let learned = brain.learned_concepts.lock().unwrap();
-                        learned.iter().rev().take(8)
-                            .map(|(label, _)| serde_json::json!({"label": label, "similarity": 1.0}))
-                            .collect()
-                    };
+            match brain_cognition::autonomy::youtube_learn_academic(&url, "", brain.clone()).await {
+                Ok(result) => {
+                    let top: Vec<serde_json::Value> = result.key_concepts.iter()
+                        .take(8)
+                        .map(|label| serde_json::json!({"label": label, "similarity": 1.0}))
+                        .collect();
                     brain.sse.emit("text_ingested", serde_json::json!({
-                        "source": "youtube", "url": url, "triples": pairs,
+                        "source": "youtube", "url": url, "triples": result.triples_count,
                     }));
                     return Json(serde_json::json!({
                         "status": "learned",
                         "url": url,
                         "source": "youtube",
-                        "triples_extracted": pairs,
+                        "topic": result.topic,
+                        "triples_extracted": result.triples_count,
                         "associations": top,
                     })).into_response();
                 }
@@ -1240,11 +1238,13 @@ pub async fn api_brain_learn_academic(State(state): State<Arc<AppState>>, Json(b
         return Json(serde_json::json!({"error": "query required"})).into_response();
     }
     if let Some(brain) = &state.brain {
-        match brain_cognition::autonomy::youtube_learn_academic(&query, &topic, brain).await {
-            Ok(pairs) => Json(serde_json::json!({
+        match brain_cognition::autonomy::youtube_learn_academic(&query, &topic, brain.clone()).await {
+            Ok(result) => Json(serde_json::json!({
                 "status": "learned",
                 "query": query,
-                "concepts_learned": pairs,
+                "topic": result.topic,
+                "concepts_learned": result.triples_count,
+                "key_concepts": result.key_concepts,
             })).into_response(),
             Err(e) => Json(serde_json::json!({
                 "status": "error",
@@ -2085,10 +2085,19 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
                 if emb.len() != q.len() { return None; }
                 let dot: f32 = q.iter().zip(emb.iter()).map(|(a, b)| a*b).sum();
                 let en: f32 = emb.iter().map(|x| x*x).sum::<f32>().sqrt().max(1e-9);
-                Some((label.clone(), dot / (qn * en)))
+                let cosine = dot / (qn * en);
+                // Boost labels that appear as a substring in the query
+                // (e.g. "lora" in "what is lora and how does it work")
+                let text_match = label.len() >= 3 && message.contains(label.as_str());
+                if cosine >= 0.35 || text_match {
+                    Some((label.clone(), if text_match { cosine.max(0.6) } else { cosine }))
+                } else {
+                    None
+                }
             }).collect();
             scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            scored.into_iter().filter(|(_, s)| *s >= 0.45).take(5).collect()
+            scored.dedup_by(|a, b| a.0 == b.0);
+            scored.into_iter().take(5).collect()
         } else { vec![] }
     } else { vec![] };
 
@@ -2236,14 +2245,32 @@ async fn native_companion_dialogue(state: &AppState, body: &serde_json::Value) -
     if !kg_facts.is_empty() {
         brain_ctx_parts.push(format!("knows that {}", kg_facts[0]));
     }
-    // Learned content from fetched URLs / academic videos — highest-quality grounding
     if !learned_hits.is_empty() {
-        let bullets: String = learned_hits.iter()
-            .map(|(s, sim)| format!("  - {s} (relevance {:.2})", sim))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let mut bullets: Vec<String> = Vec::new();
+        for (label, sim) in &learned_hits {
+            bullets.push(format!("  - {label} (relevance {:.2})", sim));
+            // Pull KG triples — try both the label as-is and with spaces
+            // inserted/removed (e.g. "turboquant" vs "turbo quant").
+            let mut edge_labels = vec![label.clone()];
+            if !label.contains(' ') && label.len() > 6 {
+                // Try inserting a space at each position
+                for i in 3..label.len()-2 {
+                    let spaced = format!("{} {}", &label[..i], &label[i..]);
+                    edge_labels.push(spaced);
+                }
+            }
+            for el in &edge_labels {
+                if let Ok(edges) = brain.memory_db.get_edges(el, 8) {
+                    for e in &edges {
+                        bullets.push(format!("    * {} {} {}", e.source_label, e.relation, e.target_label));
+                    }
+                    if !edges.is_empty() { break; }
+                }
+            }
+        }
         brain_ctx_parts.push(format!(
-            "Learned from pages/videos the user has shown you (use these directly to answer):\n{bullets}"));
+            "Learned from pages/videos the user has shown you — use these FACTS to answer:\n{}",
+            bullets.join("\n")));
     }
     if let Some(ref sc) = spiking_ctx {
         brain_ctx_parts.push(sc.clone());
@@ -3627,9 +3654,9 @@ pub async fn api_brain_learn_batch(
                 continue;
             }
 
-            match brain_cognition::autonomy::youtube_learn_academic(&url, &topic, brain).await {
-                Ok(pairs) => {
-                    total_triples += pairs;
+            match brain_cognition::autonomy::youtube_learn_academic(&url, &topic, brain.clone()).await {
+                Ok(result) => {
+                    total_triples += result.triples_count;
                     learned += 1;
                 }
                 Err(e) => {
